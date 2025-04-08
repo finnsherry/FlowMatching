@@ -9,3 +9,5 @@ output/
 old/
 
 test*
+
+.pytest_cache
