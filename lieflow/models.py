@@ -26,7 +26,7 @@ import numpy as np
 from tqdm.auto import tqdm
 from lieflow.groups import Group, MatrixGroup
 
-#pylint:disable=invalid-name
+#pylint:disable=invalid-name, too-many-arguments
 def get_model_FM(G: Group | MatrixGroup, L=2, power_group=False,
                  H=64, embed_dim=256, num_heads=8, expansion=4):
     """
@@ -51,12 +51,10 @@ def get_model_FM(G: Group | MatrixGroup, L=2, power_group=False,
         if power_group:
             return FlowFieldPowerGroup(G, embed_dim=embed_dim,
                                        num_heads=num_heads, expansion=expansion, L=L)
-        else:
-            return FlowFieldGroup(G, H=H, L=L)
-    elif isinstance(G, MatrixGroup):
+        return FlowFieldGroup(G, H=H, L=L)
+    if isinstance(G, MatrixGroup):
         return FlowFieldMatrixGroup(G, H=H, L=L)
-    else:
-        raise ValueError(f"{G} is neither a `Group` nor a `Matrix Group`!")
+    raise ValueError(f"{G} is neither a `Group` nor a `Matrix Group`!")
 
 def get_model_SCFM(G: Group | MatrixGroup, H=64, L=2):
     """
@@ -70,10 +68,9 @@ def get_model_SCFM(G: Group | MatrixGroup, H=64, L=2):
     """
     if isinstance(G, Group):
         return ShortCutFieldGroup(G, H=H, L=L)
-    elif isinstance(G, MatrixGroup):
+    if isinstance(G, MatrixGroup):
         return ShortCutFieldMatrixGroup(G, H=H, L=L)
-    else:
-        raise ValueError(f"{G} is neither a `Group` nor a `Matrix Group`!")
+    raise ValueError(f"{G} is neither a `Group` nor a `Matrix Group`!")
 
 
 # class FlowFieldGroup(nn.Module):
@@ -231,6 +228,7 @@ class ShortCutFieldGroup(nn.Module):
         Δt = Δt.view(1, 1).expand(g_t.shape[0], 1)
         return self.G.L(g_t, self.G.exp(Δt * self(g_t, t, Δt)))
 
+    #pylint:disable=too-many-arguments, too-many-locals
     def train_network(self, device, train_loader, optimizer, loss, k=1/4):
         self.train()
         N_batches = len(train_loader)
@@ -401,6 +399,7 @@ class ShortCutFieldMatrixGroup(nn.Module):
         A_t = (a_t[..., None, None] * basis).sum(-3)
         return self.G.L(R_t, self.G.exp(Δt * A_t))
 
+    #pylint:disable=too-many-arguments, too-many-locals
     def train_network(self, device, train_loader, optimizer, loss, k=1/4):
         self.train()
         N_batches = len(train_loader)
@@ -473,6 +472,7 @@ class FlowFieldPowerGroup(nn.Module):
         [2]:
     """
 
+    #pylint:disable=too-many-arguments
     def __init__(self, G: Group, embed_dim=256, num_heads=8, expansion=4, L=2):
         super().__init__()
         self.G = G

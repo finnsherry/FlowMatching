@@ -336,8 +336,8 @@ class RmbyTSn(Group):
     scaling group on .
 
     Args:
-        `se2`: instance of the special Euclidean group.
-        `rn`: instance of the n-dimensional translation group. 
+        `rm`: instance of the m-dimensional translation group.
+        `tsn`: instance of the translation-scaling group.
     """
     def __init__(self, rm: Rn, tsn: TSn):
         super().__init__()
@@ -387,7 +387,6 @@ class RmbyTSn(Group):
 
     def __repr__(self):
         return f"R^{self.rm.dim} x TS({self.tsn.dim})"
-
 
 class MatrixGroup(ABC):
     """
