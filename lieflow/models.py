@@ -19,14 +19,16 @@
       [3]:
 """
 
+#pylint:disable=non-ascii-name,missing-function-docstring,missing-class-docstring
 import torch
 import torch.nn as nn
 import numpy as np
 from tqdm.auto import tqdm
 from lieflow.groups import Group, MatrixGroup
 
-
-def get_model_FM(G: Group | MatrixGroup, L=2, power_group=False, H=64, embed_dim=256, num_heads=8, expansion=4):
+#pylint:disable=invalid-name, too-many-arguments
+def get_model_FM(G: Group | MatrixGroup, L=2, power_group=False,
+                 H=64, embed_dim=256, num_heads=8, expansion=4):
     """
     Return an instance of a flow matching model corresponding to the type of
     `G`.
@@ -47,14 +49,13 @@ def get_model_FM(G: Group | MatrixGroup, L=2, power_group=False, H=64, embed_dim
     """
     if isinstance(G, Group):
         if power_group:
-            return FlowFieldPowerGroup(G, embed_dim=embed_dim, num_heads=num_heads, expansion=expansion, L=L)
-        else:
-            return FlowFieldGroup(G, H=H, L=L)
-    elif isinstance(G, MatrixGroup):
+            return FlowFieldPowerGroup(G, embed_dim=embed_dim,
+                                       num_heads=num_heads, expansion=expansion, L=L)
+        return FlowFieldGroup(G, H=H, L=L)
+    if isinstance(G, MatrixGroup):
         return FlowFieldMatrixGroup(G, H=H, L=L)
-    else:
-        raise ValueError(f"{G} is neither a `Group` nor a `Matrix Group`!")
-    
+    raise ValueError(f"{G} is neither a `Group` nor a `Matrix Group`!")
+
 def get_model_SCFM(G: Group | MatrixGroup, H=64, L=2):
     """
     Return an instance of a shortcut model corresponding to the type of `G`.
@@ -67,17 +68,16 @@ def get_model_SCFM(G: Group | MatrixGroup, H=64, L=2):
     """
     if isinstance(G, Group):
         return ShortCutFieldGroup(G, H=H, L=L)
-    elif isinstance(G, MatrixGroup):
+    if isinstance(G, MatrixGroup):
         return ShortCutFieldMatrixGroup(G, H=H, L=L)
-    else:
-        raise ValueError(f"{G} is neither a `Group` nor a `Matrix Group`!")
-    
+    raise ValueError(f"{G} is neither a `Group` nor a `Matrix Group`!")
+
 
 # class FlowFieldGroup(nn.Module):
 #     """
 #     Model for flow matching[1] on Lie groups of type `Group` over exponential
 #     curves.[2]
-    
+
 #     Args:
 #         `G`: group of type `Group` or `MatrixGroup`.
 #       Optional:
@@ -90,7 +90,7 @@ def get_model_SCFM(G: Group | MatrixGroup, H=64, L=2):
 #           DOI:10.48550/arXiv.2210.02747.
 #         [2]:
 #     """
-    
+
 #     def __init__(self, G: Group, H=64, L=2):
 #         super().__init__()
 #         self.G = G
@@ -102,11 +102,11 @@ def get_model_SCFM(G: Group | MatrixGroup, H=64, L=2):
 
 #     def forward(self, g_t, t):
 #         return self.network(torch.cat((g_t, t), dim=-1))
-    
+
 #     def step(self, g_t, t, Δt):
 #         t = t.view(1, 1).expand(g_t.shape[0], 1)
 #         return self.G.exp(self.G.log(g_t) + Δt * self(g_t, t))
-    
+
 #     def train_network(self, device, train_loader, optimizer, loss):
 #         self.train()
 #         N_batches = len(train_loader)
@@ -149,7 +149,7 @@ class FlowFieldGroup(nn.Module):
           DOI:10.48550/arXiv.2210.02747.
         [2]:
     """
-    
+
     def __init__(self, G: Group, H=64, L=2):
         super().__init__()
         self.G = G
@@ -161,11 +161,11 @@ class FlowFieldGroup(nn.Module):
 
     def forward(self, g_t, t):
         return self.network(torch.cat((g_t, t), dim=-1))
-    
+
     def step(self, g_t, t, Δt):
         t = t.view(1, 1).expand(g_t.shape[0], 1)
         return self.G.L(g_t, self.G.exp(Δt * self(g_t, t)))
-    
+
     def train_network(self, device, train_loader, optimizer, loss):
         self.train()
         N_batches = len(train_loader)
@@ -188,11 +188,11 @@ class FlowFieldGroup(nn.Module):
             batch_loss.backward()
             optimizer.step()
         return losses.mean()
-    
+
     @property
     def parameter_count(self):
         return sum(p.numel() for p in self.parameters())
-    
+
 class ShortCutFieldGroup(nn.Module):
     """
     Model for shortcut modeling[1] on Lie groups of type `Group` over
@@ -222,12 +222,13 @@ class ShortCutFieldGroup(nn.Module):
 
     def forward(self, g_t, t, Δt):
         return self.network(torch.cat((g_t, t, Δt), dim=-1))
-    
+
     def step(self, g_t, t, Δt):
         t = t.view(1, 1).expand(g_t.shape[0], 1)
         Δt = Δt.view(1, 1).expand(g_t.shape[0], 1)
         return self.G.L(g_t, self.G.exp(Δt * self(g_t, t, Δt)))
-    
+
+    #pylint:disable=too-many-arguments, too-many-locals
     def train_network(self, device, train_loader, optimizer, loss, k=1/4):
         self.train()
         N_batches = len(train_loader)
@@ -244,7 +245,7 @@ class ShortCutFieldGroup(nn.Module):
             t = torch.rand(len(g_1), 1).to(device)
             g_0, g_1 = g_0.to(device), g_1.to(device)
             g_t = self.G.L(g_0, self.G.exp(t * self.G.log(self.G.L_inv(g_0, g_1))))
-            
+
             Δt = torch.rand(N_total, 1).to(device) * (1 - t) # t + Δt <= 1.
             A_t = torch.zeros_like(g_t)
             N_SG = int(k * N_total) # Number of samples used for self-consistency loss.
@@ -268,11 +269,11 @@ class ShortCutFieldGroup(nn.Module):
             batch_loss.backward()
             optimizer.step()
         return losses.mean()
-    
+
     @property
     def parameter_count(self):
         return sum(p.numel() for p in self.parameters())
-    
+
 
 class FlowFieldMatrixGroup(nn.Module):
     """
@@ -294,7 +295,7 @@ class FlowFieldMatrixGroup(nn.Module):
           DOI:10.48550/arXiv.2410.12557
         [3]:
     """
-    
+
     def __init__(self, G: MatrixGroup, H=64, L=2):
         super().__init__()
         self.G = G
@@ -305,8 +306,13 @@ class FlowFieldMatrixGroup(nn.Module):
         )
 
     def forward(self, R_t, t):
-        return self.network(torch.cat((R_t.flatten(start_dim=-2, end_dim=-1), t.flatten(start_dim=-2, end_dim=-1)), dim=-1))
-    
+        return self.network(
+            torch.cat(
+                (R_t.flatten(start_dim=-2, end_dim=-1), t.flatten(start_dim=-2, end_dim=-1)),
+                dim=-1
+            )
+        )
+
     def step(self, R_t, t, Δt):
         t = t.view(1, 1).expand(R_t.shape[0], 1, 1)
         # Components w.r.t. Lie algebra basis.
@@ -314,7 +320,7 @@ class FlowFieldMatrixGroup(nn.Module):
         basis = self.G.lie_algebra_basis
         A_t = (a_t[..., None, None] * basis).sum(-3)
         return self.G.L(R_t, self.G.exp(Δt * A_t))
-    
+
     def train_network(self, device, train_loader, optimizer, loss):
         self.train()
         N_batches = len(train_loader)
@@ -339,11 +345,11 @@ class FlowFieldMatrixGroup(nn.Module):
             batch_loss.backward()
             optimizer.step()
         return losses.mean()
-    
+
     @property
     def parameter_count(self):
         return sum(p.numel() for p in self.parameters())
-    
+
 class ShortCutFieldMatrixGroup(nn.Module):
     """
     Model for shortcut modeling[1] on Lie groups of type `MatrixGroup` over
@@ -375,8 +381,15 @@ class ShortCutFieldMatrixGroup(nn.Module):
         )
 
     def forward(self, R_t, t, Δt):
-        return self.network(torch.cat((R_t.flatten(start_dim=-2, end_dim=-1), t.flatten(start_dim=-2, end_dim=-1), Δt.flatten(start_dim=-2, end_dim=-1)), dim=-1))
-    
+        return self.network(
+            torch.cat(
+                (R_t.flatten(start_dim=-2, end_dim=-1),
+                 t.flatten(start_dim=-2, end_dim=-1),
+                 Δt.flatten(start_dim=-2, end_dim=-1)),
+                dim=-1
+            )
+        )
+
     def step(self, R_t, t, Δt):
         t = t.view(1, 1).expand(R_t.shape[0], 1, 1)
         Δt = Δt.view(1, 1).expand(R_t.shape[0], 1, 1)
@@ -385,7 +398,8 @@ class ShortCutFieldMatrixGroup(nn.Module):
         basis = self.G.lie_algebra_basis
         A_t = (a_t[..., None, None] * basis).sum(-3)
         return self.G.L(R_t, self.G.exp(Δt * A_t))
-    
+
+    #pylint:disable=too-many-arguments, too-many-locals
     def train_network(self, device, train_loader, optimizer, loss, k=1/4):
         self.train()
         N_batches = len(train_loader)
@@ -403,7 +417,7 @@ class ShortCutFieldMatrixGroup(nn.Module):
             t = torch.rand(len(R_1), 1, 1).to(device)
             R_0, R_1 = R_0.to(device), R_1.to(device)
             R_t = self.G.L(R_0, self.G.exp(t * self.G.log(self.G.L_inv(R_0, R_1))))
-            
+
             Δt = torch.rand(N_total, 1, 1).to(device) * (1 - t) # t + Δt <= 1.
             A_t = torch.zeros_like(R_t)
             N_SG = int(k * N_total) # Number of samples used for self-consistency loss.
@@ -422,7 +436,7 @@ class ShortCutFieldMatrixGroup(nn.Module):
             B_t_Δt = (b_t_Δt[..., None, None] * basis).sum(-1)
             with torch.no_grad():
                 A_t[:N_SG] = (B_t + B_t_Δt) / 2
-                
+
             # Components w.r.t. Lie algebra basis.
             a_t = self.G.lie_algebra_components(A_t)
 
@@ -432,7 +446,7 @@ class ShortCutFieldMatrixGroup(nn.Module):
             batch_loss.backward()
             optimizer.step()
         return losses.mean()
-    
+
     @property
     def parameter_count(self):
         return sum(p.numel() for p in self.parameters())
@@ -457,11 +471,12 @@ class FlowFieldPowerGroup(nn.Module):
           DOI:10.48550/arXiv.2210.02747.
         [2]:
     """
-    
+
+    #pylint:disable=too-many-arguments
     def __init__(self, G: Group, embed_dim=256, num_heads=8, expansion=4, L=2):
         super().__init__()
         self.G = G
-        
+
         self.network = nn.Sequential(
             nn.Linear(G.dim+1, embed_dim),
             *(L*(EncoderBlock(embed_dim, num_heads, expansion),)),
@@ -470,11 +485,11 @@ class FlowFieldPowerGroup(nn.Module):
 
     def forward(self, g_t, t):
         return self.network(torch.cat((g_t, t), dim=-1))
-    
+
     def step(self, g_t, t, Δt):
         t = t.view(1, 1, 1).expand(*g_t.shape[:-1], 1)
         return self.G.L(g_t, self.G.exp(Δt * self(g_t, t)))
-    
+
     def train_network(self, device, train_loader, optimizer, loss):
         self.train()
         N_batches = len(train_loader)
@@ -497,7 +512,7 @@ class FlowFieldPowerGroup(nn.Module):
             batch_loss.backward()
             optimizer.step()
         return losses.mean()
-    
+
     @property
     def parameter_count(self):
         return sum(p.numel() for p in self.parameters())
@@ -526,7 +541,7 @@ class EncoderBlock(nn.Module):
         A, _ = self.attn(x, x, x, need_weights=False)
         x = self.ln1(A + x)
         return self.ln2(x + self.ff(x))
-    
+
     @property
     def parameter_count(self):
         return sum(p.numel() for p in self.parameters())
@@ -536,25 +551,25 @@ class LogarithmicDistance(nn.Module):
         super().__init__()
         self.w = w
         self.ρ = lambda A_1, A_2: self.ρ_c_normalised(A_1, A_2, w)
-    
+
     def ρ_c_normalised(self, A_1, A_2, w):
         return (w**2 * (A_2 - A_1)**2).mean()
-    
+
     def forward(self, pred, target):
         return self.ρ(pred, target)
 
     def __repr__(self):
         return f"LogarithmicDistance{tuple(self.w.numpy())}"
-    
+
 class PermutationInvariantLogarithmicDistance(nn.Module):
     def __init__(self, w):
         super().__init__()
         self.w = w
         self.ρ = lambda A_1, A_2: self.ρ_c_normalised(A_1, A_2, w)
-    
+
     def ρ_c_normalised(self, A_1, A_2, w):
         return (w**2 * (A_2 - A_1)**2).mean()
-    
+
     def forward(self, pred, target):
         pred_norms = torch.norm(pred, dim=-1)
         pred_sorted_indices = torch.argsort(pred_norms, dim=-1)

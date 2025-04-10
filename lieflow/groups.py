@@ -20,10 +20,11 @@
       4. `SO3()` <: `MatrixGroup`: special orthogonal group of rotations on R^3.
 """
 
+#pylint:disable=non-ascii-name
 from abc import ABC
 import torch
 
-
+#pylint:disable=invalid-name
 class Group(ABC):
     """
     Class encapsulating basic Lie group and Lie algebra properties for groups
@@ -36,25 +37,25 @@ class Group(ABC):
     def __init__(self):
         super().__init__()
         self.dim = None
-    
+
     def L(self, g_1, g_2):
         """
         Left multiplication of `g_2` by `g_1`, i.e. `g_1 + g_2`.
         """
         raise NotImplementedError
-    
+
     def L_inv(self, g_1, g_2):
         """
         Left multiplication of `g_2` by `g_1^-1`, i.e. `g_2 - g_1`.
         """
         raise NotImplementedError
-    
+
     def log(self, g):
         """
         Lie group logarithm of `g`, i.e. `g`.
         """
         raise NotImplementedError
-    
+
     def exp(self, A):
         """
         Lie group exponential of `A`, i.e. `A`.
@@ -71,34 +72,34 @@ class Rn(Group):
     def __init__(self, n):
         super().__init__()
         self.dim = n
-    
+
     def L(self, g_1, g_2):
         """
         Left multiplication of `g_2` by `g_1`, i.e. `g_1 + g_2`.
         """
         return g_1 + g_2
-    
+
     def L_inv(self, g_1, g_2):
         """
         Left multiplication of `g_2` by `g_1^-1`, i.e. `g_2 - g_1`.
         """
         return g_2 - g_1
-    
+
     def log(self, g):
         """
         Lie group logarithm of `g`, i.e. `g`.
         """
         return g.clone()
-    
+
     def exp(self, A):
         """
         Lie group exponential of `A`, i.e. `A`.
         """
         return A.clone()
-    
+
     def __repr__(self):
         return f"R^{self.dim}"
-    
+
 class SE2(Group):
     """
     Special Euclidean group of roto-translations on R^2.
@@ -106,7 +107,7 @@ class SE2(Group):
     def __init__(self):
         super().__init__()
         self.dim = 3
-    
+
     def L(self, g_1, g_2):
         """
         Left multiplication of `g_2` by `g_1`.
@@ -118,7 +119,7 @@ class SE2(Group):
 
         cos = torch.cos(θ_1)
         sin = torch.sin(θ_1)
-        
+
         x_2 = g_2[..., 0]
         y_2 = g_2[..., 1]
         θ_2 = g_2[..., 2]
@@ -127,7 +128,7 @@ class SE2(Group):
         g[..., 1] = y_1 + sin * x_2 + cos * y_2
         g[..., 2] = _mod_offset(θ_1 + θ_2, 2 * torch.pi, -torch.pi)
         return g
-    
+
     def L_inv(self, g_1, g_2):
         """
         Left multiplication of `g_2` by `g_1^-1`.
@@ -177,7 +178,7 @@ class SE2(Group):
         c1 = A[..., 0]
         c2 = A[..., 1]
         c3 = A[..., 2]
-        
+
         cos = torch.cos(c3/2.)
         sin = torch.sin(c3/2.)
         sinc = torch.sinc(c3/(2. * torch.pi)) # torch.sinc(x) = sin(pi x) / (pi x)
@@ -186,7 +187,7 @@ class SE2(Group):
         g[..., 1] = (c1 * sin + c2 * cos) * sinc
         g[..., 2] = _mod_offset(c3, 2 * torch.pi, -torch.pi)
         return g
-    
+
     def L_star(self, g, A):
         """
         Push-forward of `A` under left multiplication by `g`.
@@ -201,7 +202,7 @@ class SE2(Group):
         B[..., 1] = sin * A[..., 0] + cos * A[1]
         B[..., 2] = A[..., 2]
         return B
-    
+
     def __repr__(self):
         return "SE(2)"
 
@@ -219,7 +220,7 @@ class SE2byRn(Group):
         self.dim = se2.dim + rn.dim
         self.se2 = se2
         self.rn = rn
-    
+
     def L(self, g_1, g_2):
         """
         Left multiplication of `g_2 = (x_2, p_2)` by `g_1 = (x_1, p_1)`, i.e.
@@ -229,7 +230,7 @@ class SE2byRn(Group):
         g[..., :3] = self.se2.L(g_1[..., :3], g_2[..., :3])
         g[..., 3:] = self.rn.L(g_1[..., 3:], g_2[..., 3:])
         return g
-    
+
     def L_inv(self, g_1, g_2):
         """
         Left multiplication of `g_2 = (x_2, p_2)` by `g_1^-1 = (-x_1, p_1^-1)`,
@@ -239,7 +240,7 @@ class SE2byRn(Group):
         g[..., :3] = self.se2.L_inv(g_1[..., :3], g_2[..., :3])
         g[..., 3:] = self.rn.L_inv(g_1[..., 3:], g_2[..., 3:])
         return g
-    
+
     def log(self, g):
         """
         Lie group logarithm of `g = (x, p)`, i.e. `(x, P)` with `P` in Lie
@@ -249,7 +250,7 @@ class SE2byRn(Group):
         A[..., :3] = self.se2.log(g[..., :3])
         A[..., 3:] = self.rn.log(g[..., 3:])
         return A
-    
+
     def exp(self, A):
         """
         Lie group exponential of `A = (x, P)`, i.e. `(x, p)` with `p` in Lie
@@ -259,7 +260,7 @@ class SE2byRn(Group):
         g[..., :3] = self.se2.exp(A[..., :3])
         g[..., 3:] = self.rn.exp(A[..., 3:])
         return g
-    
+
     def __repr__(self):
         return f"SE(2) x R^{self.rn.dim}"
 
@@ -273,7 +274,7 @@ class TSn(Group):
     def __init__(self, n):
         super().__init__()
         self.dim = n + 1
-    
+
     def L(self, g_1, g_2):
         """
         Left multiplication of `g_2` by `g_1`.
@@ -287,7 +288,7 @@ class TSn(Group):
         g[..., :-1] = x_1 + torch.exp(_sigmoid(s_1))[..., None] * x_2
         g[..., -1] = _sigmoid(s_1 + s_2)
         return g
-    
+
     def L_inv(self, g_1, g_2):
         """
         Left multiplication of `g_2` by `g_1^-1`.
@@ -297,11 +298,11 @@ class TSn(Group):
         s_1 = g_1[..., -1]
         x_2 = g_2[..., :-1]
         s_2 = g_2[..., -1]
-        
+
         g[..., :-1] = (x_2 - x_1) * torch.exp(_sigmoid(-s_1))[..., None]
         g[..., -1] = _sigmoid(s_2 - s_1)
         return g
-    
+
     def log(self, g):
         """
         Lie group logarithm of `g`.
@@ -313,7 +314,7 @@ class TSn(Group):
         A[..., :-1] =  _expc(s)[..., None] * x
         A[..., 2] = s.clone()
         return A
-    
+
     def exp(self, A):
         """
         Lie group exponential of `A`.
@@ -325,25 +326,25 @@ class TSn(Group):
         g[..., :-1] = cx / _expc(cs)[..., None]
         g[..., -1] = cs.clone()
         return g
-    
+
     def __repr__(self):
         return f"TS({self.dim})"
-    
+
 class RmbyTSn(Group):
     """
     Direct product of m-dimensional translation group and the translation-
     scaling group on .
 
     Args:
-        `se2`: instance of the special Euclidean group.
-        `rn`: instance of the n-dimensional translation group. 
+        `rm`: instance of the m-dimensional translation group.
+        `tsn`: instance of the translation-scaling group.
     """
     def __init__(self, rm: Rn, tsn: TSn):
         super().__init__()
         self.dim = rm.dim + tsn.dim
         self.rm = rm
         self.tsn = tsn
-    
+
     def L(self, g_1, g_2):
         """
         Left multiplication of `g_2 = (x_2, p_2)` by `g_1 = (x_1, p_1)`, i.e.
@@ -353,7 +354,7 @@ class RmbyTSn(Group):
         g[..., :self.rm.dim] = self.rm.L(g_1[..., :self.rm.dim], g_2[..., :self.rm.dim])
         g[..., self.rm.dim:] = self.tsn.L(g_1[..., self.rm.dim:], g_2[..., self.rm.dim:])
         return g
-    
+
     def L_inv(self, g_1, g_2):
         """
         Left multiplication of `g_2 = (x_2, p_2)` by `g_1^-1 = (-x_1, p_1^-1)`,
@@ -363,7 +364,7 @@ class RmbyTSn(Group):
         g[..., :self.rm.dim] = self.rm.L_inv(g_1[..., :self.rm.dim], g_2[..., :self.rm.dim])
         g[..., self.rm.dim:] = self.tsn.L_inv(g_1[..., self.rm.dim:], g_2[..., self.rm.dim:])
         return g
-    
+
     def log(self, g):
         """
         Lie group logarithm of `g = (x, p)`, i.e. `(x, P)` with `P` in Lie
@@ -373,7 +374,7 @@ class RmbyTSn(Group):
         A[..., :self.rm.dim] = self.rm.log(g[..., :self.rm.dim])
         A[..., self.rm.dim:] = self.tsn.log(g[..., self.rm.dim:])
         return A
-    
+
     def exp(self, A):
         """
         Lie group exponential of `A = (x, P)`, i.e. `(x, p)` with `p` in Lie
@@ -383,10 +384,9 @@ class RmbyTSn(Group):
         g[..., :self.rm.dim] = self.rm.exp(A[..., :self.rm.dim])
         g[..., self.rm.dim:] = self.tsn.exp(A[..., self.rm.dim:])
         return g
-    
+
     def __repr__(self):
         return f"R^{self.rm.dim} x TS({self.tsn.dim})"
-    
 
 class MatrixGroup(ABC):
     """
@@ -403,17 +403,18 @@ class MatrixGroup(ABC):
         self.dim = None
         self.mat_dim = None
         self.lie_algebra_basis = None
-    
+
     def L(self, R_1, R_2):
         """
         Left multiplication of `R_2` by `R_1`.
         """
         return R_1 @ R_2
-    
+
     def L_inv(self, R_1, R_2):
         """
         Left multiplication of `R_2` by `R_1^-1`.
         """
+        #pylint:disable=not-callable
         return torch.linalg.solve(R_1, R_2)
 
     def log(self, R):
@@ -432,7 +433,7 @@ class MatrixGroup(ABC):
         `exp(A) = R`.
         """
         return torch.matrix_exp(A)
-    
+
     def lie_algebra_components(self, A):
         """
         Compute the components of Lie algebra basis `A` with respect to the
@@ -478,20 +479,20 @@ class SO3(MatrixGroup):
         return (R - R.transpose(-2, -1)) / (2 * torch.sinc(
                 q[..., None, None] / ((1 + ε_stab) * torch.pi)
         ))
-    
+
     def lie_algebra_components(self, A):
         """
         Compute the components of Lie algebra basis `A` with respect to the
         basis given by `self.lie_algebra_basis`.
         """
         return torch.cat((A[..., 2, 1, None], A[..., 0, 2, None], A[..., 1, 0, None]), dim=-1)
-    
+
     def __repr__(self):
         return "SO(3)"
-    
+
 
 # Utils
-    
+
 def _mod_offset(x, period, offset):
     """Compute `x` modulo `period` with offset `offset`."""
     return x - (x - offset)//period * period
