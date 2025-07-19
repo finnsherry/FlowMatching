@@ -653,17 +653,17 @@ class M3:
 
     def __init__(self):
         super().__init__()
-        self.dim = None
         self.se3 = SE3()
+        self.mat_dim = 4 * 2
 
     def get_mav_generator(self, p_1, p_2, ε_stab=0.001):
         """
         Compute the minimum angular velocity (mav) generator between `p_1` and `p_2` [1, Prop. 1].
 
         References:
-            [1]: G. Bellaard and B.M.N. Smets.
-              "Roto-Translation Invariant Metrics on Position-Orientation Space." To appear in the proceedings of the 7th international conference on the Geometric Science of Information (GSI) (2025).
-              DOI:10.48550/arXiv.2504.03309.
+            [1]: G. Bellaard and B.M.N. Smets. "Roto-Translation Invariant Metrics
+          on Position-Orientation Space." arXiv preprint (2025).
+          DOI:10.48550/arXiv.2504.03309.
         """
         shape = torch.broadcast_shapes(p_1.shape, p_2.shape)[:-2]
         device = p_2.device
@@ -735,7 +735,7 @@ def _expc(x):
 
 def cross_product(x, y):
     shape = torch.broadcast_shapes(x.shape, y.shape)
-    return torch.cross(x.expand(shape), y.expand(shape), dim=-1)
+    return torch.linalg.cross(x.expand(shape), y.expand(shape))
 
 
 def _cotan(x):
