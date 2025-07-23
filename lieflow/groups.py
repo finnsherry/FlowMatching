@@ -671,10 +671,10 @@ class M3:
         x_2, n_2 = self.get_position_orientation(p_2)
 
         θ = torch.acos((n_1 * n_2).sum(-1).clamp(-1, 1))[..., None]
-
         parallel = θ < ε_stab
 
         L = (cross_product(n_1, n_2) / torch.sin(θ)).nan_to_num()
+        L = L * ~parallel + torch.zeros_like(L) * parallel
         x_m = (x_1 + x_2) / 2.0
         x_diff = x_2 - x_1
         x_perp = (L * x_diff).sum(-1, keepdim=True) * L
@@ -689,7 +689,7 @@ class M3:
         A = torch.zeros(*shape, 4, 4).to(device)
         return self.se3.pack_translation_rotation(
             A,
-            (x_2 - x_1) * parallel + (-cross_product(ω_vec, c) + v) * ~parallel,
+            x_diff * parallel + (-cross_product(ω_vec, c) + v) * ~parallel,
             ω * ~parallel[..., None],
         )
 

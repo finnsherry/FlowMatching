@@ -68,6 +68,8 @@ def get_model_FM(
             return FlowFieldGroup(G, H=H, L=L)
     elif isinstance(G, MatrixGroup):
         return FlowFieldMatrixGroup(G, H=H, L=L)
+    elif isinstance(G, M3):
+        return FlowFieldM3(G, H=H, L=L)
     else:
         raise ValueError(f"{G} is neither a `Group` nor a `Matrix Group`!")
 
@@ -134,8 +136,7 @@ class FlowFieldGroup(nn.Module):
         return self.G.L(g_t, self.G.exp(Δt * self(g_t, t)))
 
     def step_back(self, g_t, t, Δt):
-        t = t.view(1, 1).expand(g_t.shape[0], 1)
-        return self.G.L(g_t, self.G.exp(-Δt * self(g_t, t)))
+        return self.step(g_t, t, -Δt)
 
     def train_network(self, device, train_loader, optimizer, loss):
         self.train()
@@ -210,9 +211,7 @@ class ShortCutFieldGroup(nn.Module):
         return self.G.L(g_t, self.G.exp(Δt * self(g_t, t, Δt)))
 
     def step_back(self, g_t, t, Δt):
-        t = t.view(1, 1).expand(g_t.shape[0], 1)
-        Δt = Δt.view(1, 1).expand(g_t.shape[0], 1)
-        return self.G.L(g_t, self.G.exp(-Δt * self(g_t, t, Δt)))
+        return self.step(g_t, t, -Δt)
 
     def train_network(self, device, train_loader, optimizer, loss, k=1 / 4):
         self.train()
@@ -319,12 +318,7 @@ class FlowFieldMatrixGroup(nn.Module):
         return self.G.L(R_t, self.G.exp(Δt * A_t))
 
     def step_back(self, R_t, t, Δt):
-        t = t.view(1, 1).expand(R_t.shape[0], 1, 1)
-        # Components w.r.t. Lie algebra basis.
-        a_t = -self(R_t, t)
-        basis = self.G.lie_algebra_basis
-        A_t = (a_t[..., None, None] * basis).sum(-3)
-        return self.G.L(R_t, self.G.exp(Δt * A_t))
+        return self.step(R_t, t, -Δt)
 
     def train_network(self, device, train_loader, optimizer, loss):
         self.train()
@@ -417,13 +411,7 @@ class ShortCutFieldMatrixGroup(nn.Module):
         return self.G.L(R_t, self.G.exp(Δt * A_t))
 
     def step_back(self, R_t, t, Δt):
-        t = t.view(1, 1).expand(R_t.shape[0], 1, 1)
-        Δt = Δt.view(1, 1).expand(R_t.shape[0], 1, 1)
-        # Components w.r.t. Lie algebra basis.
-        a_t = -self(R_t, t, Δt)
-        basis = self.G.lie_algebra_basis
-        A_t = (a_t[..., None, None] * basis).sum(-3)
-        return self.G.L(R_t, self.G.exp(Δt * A_t))
+        return self.step(R_t, t, -Δt)
 
     def train_network(self, device, train_loader, optimizer, loss, k=1 / 4):
         self.train()
@@ -517,15 +505,15 @@ class FlowFieldM3(nn.Module):
         )
 
     def forward(self, p_t, t):
-        return self.network(torch.cat((p_t.flatten(-2, -1), t), dim=-1))
+        return self.network(torch.cat((p_t.flatten(-2, -1), t.flatten(-2, -1)), dim=-1))
 
     def step(self, p_t, t, Δt):
-        t = t.view(1, 1).expand(p_t.shape[0], 1)
-        return self.m3.act(self.m3.se3.exp(Δt * self(p_t, t)), p_t)
+        t = t.view(1, 1).expand(len(p_t), 1, 1)
+        A_t = (self(p_t, t)[..., None, None] * self.m3.se3.lie_algebra_basis).sum(-3)
+        return self.m3.act(self.m3.se3.exp(Δt * A_t), p_t)
 
     def step_back(self, p_t, t, Δt):
-        t = t.view(1, 1).expand(p_t.shape[0], 1)
-        return self.m3.act(self.m3.se3.exp(-Δt * self(p_t, t)), p_t)
+        return self.step(p_t, t, -Δt)
 
     def train_network(self, device, train_loader, optimizer, loss):
         self.train()
@@ -539,13 +527,14 @@ class FlowFieldM3(nn.Module):
             unit="batch",
             leave=False,
         ):
-            t = torch.rand(len(p_1), 1).to(device)
+            t = torch.rand(len(p_1), 1, 1).to(device)
             p_0, p_1 = p_0.to(device), p_1.to(device)
             A_t = self.m3.get_mav_generator(p_0, p_1)
             g_t = self.m3.se3.exp(t * A_t)
             p_t = self.m3.act(g_t, p_0)
+            a_t = self.m3.se3.lie_algebra_components(A_t)
             optimizer.zero_grad()
-            batch_loss = loss(self(p_t, t), A_t)
+            batch_loss = loss(self(p_t, t), a_t)
             losses[i] = float(batch_loss.cpu().item())
             batch_loss.backward()
             optimizer.step()
@@ -596,8 +585,7 @@ class FlowFieldPowerGroup(nn.Module):
         return self.G.L(g_t, self.G.exp(Δt * self(g_t, t)))
 
     def step_back(self, g_t, t, Δt):
-        t = t.view(1, 1, 1).expand(*g_t.shape[:-1], 1)
-        return self.G.L(g_t, self.G.exp(-Δt * self(g_t, t)))
+        return self.step(g_t, t, -Δt)
 
     def train_network(self, device, train_loader, optimizer, loss):
         self.train()
