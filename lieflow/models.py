@@ -17,12 +17,13 @@ References:
   [2]: K. Frans, D. Hafner, S. Levine, and P. Abbeel.
   "One Step Diffusion via Shortcut Models." arXiv preprint (2024).
   DOI:10.48550/arXiv.2410.12557
-  [3]: F.M. Sherry and B.M.N. Smets. "Flow Matching on Lie Groups." arXiv
-  preprint (2025).
-  DOI:10.48550/arXiv.2504.00494.
+  [3]: F.M. Sherry and B.M.N. Smets. "Flow Matching on Lie Groups." 7th
+  International Conference on Geometric Science of Information (2025).
+  DOI:10.1007/978-3-032-03918-7_6.
   [4]: G. Bellaard and B.M.N. Smets. "Roto-Translation Invariant Metrics on
-  Position-Orientation Space." arXiv preprint (2025).
-  DOI:10.48550/arXiv.2504.03309.
+  Position-Orientation Space." 7th International Conference on Geometric Science
+  of Information (2025).
+  DOI:10.1007/978-3-032-03918-7_4.
 """
 
 import torch
@@ -107,9 +108,9 @@ class FlowFieldGroup(nn.Module):
         [1]: Y. Lipman, R.T.Q. Chen, H. Ben-Hami, M. Nickel, and M. Le.
           "Flow Matching for Generative Modeling." arXiv preprint (2022).
           DOI:10.48550/arXiv.2210.02747.
-        [2]: F.M. Sherry and B.M.N. Smets. "Flow Matching on Lie Groups." arXiv
-          preprint (2025).
-          DOI:10.48550/arXiv.2504.00494.
+        [2]: F.M. Sherry and B.M.N. Smets. "Flow Matching on Lie Groups." 7th
+          International Conference on Geometric Science of Information (2025).
+          DOI:10.1007/978-3-032-03918-7_6.
     """
 
     def __init__(self, G: Group, H=64, L=2):
@@ -181,9 +182,9 @@ class ShortCutFieldGroup(nn.Module):
         [1]: K. Frans, D. Hafner, S. Levine, and P. Abbeel.
           "One Step Diffusion via Shortcut Models." arXiv preprint (2024).
           DOI:10.48550/arXiv.2410.12557
-        [2]: F.M. Sherry and B.M.N. Smets. "Flow Matching on Lie Groups." arXiv
-          preprint (2025).
-          DOI:10.48550/arXiv.2504.00494.
+        [2]: F.M. Sherry and B.M.N. Smets. "Flow Matching on Lie Groups." 7th
+          International Conference on Geometric Science of Information (2025).
+          DOI:10.1007/978-3-032-03918-7_6.
     """
 
     def __init__(self, G: Group, H=64, L=2):
@@ -277,9 +278,9 @@ class FlowFieldMatrixGroup(nn.Module):
         [2]: K. Frans, D. Hafner, S. Levine, and P. Abbeel.
           "One Step Diffusion via Shortcut Models." arXiv preprint (2024).
           DOI:10.48550/arXiv.2410.12557
-        [3]: F.M. Sherry and B.M.N. Smets. "Flow Matching on Lie Groups." arXiv
-          preprint (2025).
-          DOI:10.48550/arXiv.2504.00494.
+        [3]: F.M. Sherry and B.M.N. Smets. "Flow Matching on Lie Groups." 7th
+          International Conference on Geometric Science of Information (2025).
+          DOI:10.1007/978-3-032-03918-7_6.
     """
 
     def __init__(self, G: MatrixGroup, H=64, L=2):
@@ -368,9 +369,9 @@ class ShortCutFieldMatrixGroup(nn.Module):
         [2]: K. Frans, D. Hafner, S. Levine, and P. Abbeel.
           "One Step Diffusion via Shortcut Models." arXiv preprint (2024).
           DOI:10.48550/arXiv.2410.12557
-        [3]: F.M. Sherry and B.M.N. Smets. "Flow Matching on Lie Groups." arXiv
-          preprint (2025).
-          DOI:10.48550/arXiv.2504.00494.
+        [3]: F.M. Sherry and B.M.N. Smets. "Flow Matching on Lie Groups." 7th
+          International Conference on Geometric Science of Information (2025).
+          DOI:10.1007/978-3-032-03918-7_6.
     """
 
     def __init__(self, G: MatrixGroup, H=64, L=2):
@@ -480,12 +481,13 @@ class FlowFieldM3(nn.Module):
         [1]: Y. Lipman, R.T.Q. Chen, H. Ben-Hami, M. Nickel, and M. Le.
           "Flow Matching for Generative Modeling." arXiv preprint (2022).
           DOI:10.48550/arXiv.2210.02747.
-        [2]: F.M. Sherry and B.M.N. Smets. "Flow Matching on Lie Groups." arXiv
-          preprint (2025).
-          DOI:10.48550/arXiv.2504.00494.
+        [2]: F.M. Sherry and B.M.N. Smets. "Flow Matching on Lie Groups." 7th
+          International Conference on Geometric Science of Information (2025).
+          DOI:10.1007/978-3-032-03918-7_6.
         [3]: G. Bellaard and B.M.N. Smets. "Roto-Translation Invariant Metrics
-          on Position-Orientation Space." arXiv preprint (2025).
-          DOI:10.48550/arXiv.2504.03309.
+          on Position-Orientation Space." 7th International Conference on
+          Geometric Science of Information (2025).
+          DOI:10.1007/978-3-032-03918-7_4.
     """
 
     def __init__(self, m3: M3, H=64, L=2):
@@ -562,9 +564,9 @@ class FlowFieldPowerGroup(nn.Module):
         [1]: Y. Lipman, R.T.Q. Chen, H. Ben-Hami, M. Nickel, and M. Le.
           "Flow Matching for Generative Modeling." arXiv preprint (2022).
           DOI:10.48550/arXiv.2210.02747.
-        [2]: F.M. Sherry and B.M.N. Smets. "Flow Matching on Lie Groups." arXiv
-          preprint (2025).
-          DOI:10.48550/arXiv.2504.00494.
+        [2]: F.M. Sherry and B.M.N. Smets. "Flow Matching on Lie Groups." 7th
+          International Conference on Geometric Science of Information (2025).
+          DOI:10.1007/978-3-032-03918-7_6.
     """
 
     def __init__(self, G: Group, embed_dim=256, num_heads=8, expansion=4, L=2):

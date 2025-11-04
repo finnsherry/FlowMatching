@@ -661,9 +661,10 @@ class M3:
         Compute the minimum angular velocity (mav) generator between `p_1` and `p_2` [1, Prop. 1].
 
         References:
-            [1]: G. Bellaard and B.M.N. Smets. "Roto-Translation Invariant Metrics
-          on Position-Orientation Space." arXiv preprint (2025).
-          DOI:10.48550/arXiv.2504.03309.
+          [1]: G. Bellaard and B.M.N. Smets. "Roto-Translation Invariant Metrics
+          on Position-Orientation Space." 7th International Conference on
+          Geometric Science of Information (2025).
+          DOI:10.1007/978-3-032-03918-7_4.
         """
         shape = torch.broadcast_shapes(p_1.shape, p_2.shape)[:-2]
         device = p_2.device
@@ -673,17 +674,17 @@ class M3:
         θ = torch.acos((n_1 * n_2).sum(-1).clamp(-1, 1))[..., None]
         parallel = θ < ε_stab
 
-        L = (cross_product(n_1, n_2) / torch.sin(θ)).nan_to_num()
-        L = L * ~parallel + torch.zeros_like(L) * parallel
+        k0 = (cross_product(n_1, n_2) / torch.sin(θ)).nan_to_num()
+        k0 = k0 * ~parallel + torch.zeros_like(k0) * parallel
         x_m = (x_1 + x_2) / 2.0
         x_diff = x_2 - x_1
-        x_perp = (L * x_diff).sum(-1, keepdim=True) * L
+        x_perp = (k0 * x_diff).sum(-1, keepdim=True) * k0
         x_par = x_diff - x_perp
 
-        c = (x_m + 0.5 * _cotan(θ / 2.0) * cross_product(L, x_par)).nan_to_num()
+        c = (x_m + 0.5 * _cotan(θ / 2.0) * cross_product(k0, x_par)).nan_to_num()
         v = x_perp
 
-        ω_vec = θ * L
+        ω_vec = θ * k0
         ω = (ω_vec[..., None, None] * self.se3.so3.lie_algebra_basis).sum(-3)
 
         A = torch.zeros(*shape, 4, 4).to(device)
