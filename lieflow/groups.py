@@ -202,8 +202,8 @@ class SE2(Group):
         cos = torch.cos(θ)
         sin = torch.sin(θ)
 
-        B[..., 0] = cos * A[..., 0] - sin * A[1]
-        B[..., 1] = sin * A[..., 0] + cos * A[1]
+        B[..., 0] = cos * A[..., 0] - sin * A[..., 1]
+        B[..., 1] = sin * A[..., 0] + cos * A[..., 1]
         B[..., 2] = A[..., 2]
         return B
 
@@ -320,7 +320,7 @@ class TSn(Group):
         s = _sigmoid(g[..., -1])
 
         A[..., :-1] = _expc(s)[..., None] * x
-        A[..., 2] = s.clone()
+        A[..., -1] = s.clone()
         return A
 
     def exp(self, A):
