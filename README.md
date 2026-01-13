@@ -57,14 +57,14 @@ Since `FlowFieldPowerGroup` uses a transformer architecture, it is possible to a
 ## Cite
 If you use this code in your own work, please cite our paper:
 
-<a id="1">[1]</a> Sherry, F.M., Smets, B.M.N. "Flow Matching on Lie Groups." arXiv preprint. Accepted in 7th International Conference on Geometric Science of Information (GSI) (2025).
+<a id="1">[1]</a> Sherry, F.M., Smets, B.M.N. "Flow Matching on Lie Groups."7th International Conference on Geometric Science of Information (GSI) (2025).
 ```
 @inproceedings{Sherry2025LieFlow,
   author =       {Sherry, Finn M. and Smets, Bart M.N.},
   title =        {{Diffusion-Shock Filtering on the Space of Positions and Orientations}},
-  booktitle =    {arXiv preprint. Accepted in 7th International Conference on Geometric Science of Information},
+  booktitle =    {7th International Conference on Geometric Science of Information},
   year =         {2025},
-  url =          {https://doi.org/10.48550/arXiv.2504.00494},
+  url =          {https://doi.org/10.1007/978-3-032-03918-7_6},
 }
 ```
 
