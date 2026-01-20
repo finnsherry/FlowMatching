@@ -30,7 +30,7 @@ import torch
 import torch.nn as nn
 import numpy as np
 from tqdm.auto import tqdm
-from lieflow.groups import Group, MatrixGroup, M3
+from lieflow.groups import Group, MatrixGroup, HomogeneousSpace
 
 
 def get_model_FM(
@@ -69,8 +69,8 @@ def get_model_FM(
             return FlowFieldGroup(G, H=H, L=L)
     elif isinstance(G, MatrixGroup):
         return FlowFieldMatrixGroup(G, H=H, L=L)
-    elif isinstance(G, M3):
-        return FlowFieldM3(G, H=H, L=L)
+    elif isinstance(G, HomogeneousSpace):
+        return FlowFieldHomogeneousSpace(G, H=H, L=L)
     else:
         raise ValueError(f"{G} is neither a `Group` nor a `Matrix Group`!")
 
@@ -151,7 +151,7 @@ class FlowFieldGroup(nn.Module):
             unit="batch",
             leave=False,
         ):
-            t = torch.rand(len(g_1), 1).to(device)
+            t = torch.rand(len(g_1), 1, device=device)
             g_0, g_1 = g_0.to(device), g_1.to(device)
             A_t = self.G.log(self.G.L_inv(g_0, g_1))
             g_t = self.G.L(g_0, self.G.exp(t * A_t))
@@ -227,11 +227,11 @@ class ShortCutFieldGroup(nn.Module):
             leave=False,
         ):
             N_total = len(g_1)  # Total number of samples in batch.
-            t = torch.rand(len(g_1), 1).to(device)
+            t = torch.rand(len(g_1), 1, device=device)
             g_0, g_1 = g_0.to(device), g_1.to(device)
             g_t = self.G.L(g_0, self.G.exp(t * self.G.log(self.G.L_inv(g_0, g_1))))
 
-            Δt = torch.rand(N_total, 1).to(device) * (1 - t)  # t + Δt <= 1.
+            Δt = torch.rand(N_total, 1, device=device) * (1 - t)  # t + Δt <= 1.
             A_t = torch.zeros_like(g_t)
             N_SG = int(k * N_total)  # Number of samples used for self-consistency loss.
 
@@ -333,7 +333,7 @@ class FlowFieldMatrixGroup(nn.Module):
             unit="batch",
             leave=False,
         ):
-            t = torch.rand(len(R_1), 1, 1).to(device)
+            t = torch.rand(len(R_1), 1, 1, device=device)
             R_0, R_1 = R_0.to(device), R_1.to(device)
             A_t = self.G.log(self.G.L_inv(R_0, R_1))
             R_t = self.G.L(R_0, self.G.exp(t * A_t))
@@ -428,11 +428,11 @@ class ShortCutFieldMatrixGroup(nn.Module):
             leave=False,
         ):
             N_total = len(R_1)  # Total number of samples in batch.
-            t = torch.rand(len(R_1), 1, 1).to(device)
+            t = torch.rand(len(R_1), 1, 1, device=device)
             R_0, R_1 = R_0.to(device), R_1.to(device)
             R_t = self.G.L(R_0, self.G.exp(t * self.G.log(self.G.L_inv(R_0, R_1))))
 
-            Δt = torch.rand(N_total, 1, 1).to(device) * (1 - t)  # t + Δt <= 1.
+            Δt = torch.rand(N_total, 1, 1, device=device) * (1 - t)  # t + Δt <= 1.
             A_t = torch.zeros_like(R_t)
             N_SG = int(k * N_total)  # Number of samples used for self-consistency loss.
 
@@ -466,13 +466,14 @@ class ShortCutFieldMatrixGroup(nn.Module):
         return sum(p.numel() for p in self.parameters())
 
 
-class FlowFieldM3(nn.Module):
+class FlowFieldHomogeneousSpace(nn.Module):
     """
-    Model for flow matching[1] on the position-orientation space `M3` over SE(3)
-    mav exponential curves.[2][3]
+    Model for flow matching[1] on Lie group homogeneous spaces.
+    Of particular interest is position-orientation space `M3` over SE(3), for
+    which we can use mav exponential curves.[2][3]
 
     Args:
-        `m3`: instance of `M3`.
+        `h`: instance of `HomogeneousSpace`.
       Optional:
         `H`: width of the network: number of channels. Defaults to 64.
         `L`: depth of the network: number of layers - 2. Defaults to 2.
@@ -490,11 +491,11 @@ class FlowFieldM3(nn.Module):
           DOI:10.1007/978-3-032-03918-7_4.
     """
 
-    def __init__(self, m3: M3, H=64, L=2):
+    def __init__(self, h: HomogeneousSpace, H=64, L=2):
         super().__init__()
-        self.m3 = M3()
+        self.h = h
         self.network = nn.Sequential(
-            nn.Linear(m3.mat_dim + 1, H),
+            nn.Linear(h.mat_dim + 1, H),
             nn.ReLU(),
             *(
                 L
@@ -503,7 +504,7 @@ class FlowFieldM3(nn.Module):
                     nn.ReLU(),
                 )
             ),
-            nn.Linear(H, m3.se3.dim),
+            nn.Linear(H, h.G.dim),
         )
 
     def forward(self, p_t, t):
@@ -511,8 +512,8 @@ class FlowFieldM3(nn.Module):
 
     def step(self, p_t, t, Δt):
         t = t.view(1, 1).expand(len(p_t), 1, 1)
-        A_t = (self(p_t, t)[..., None, None] * self.m3.se3.lie_algebra_basis).sum(-3)
-        return self.m3.act(self.m3.se3.exp(Δt * A_t), p_t)
+        A_t = (self(p_t, t)[..., None, None] * self.h.G.lie_algebra_basis).sum(-3)
+        return self.h.act(self.h.G.exp(Δt * A_t), p_t)
 
     def step_back(self, p_t, t, Δt):
         return self.step(p_t, t, -Δt)
@@ -529,12 +530,12 @@ class FlowFieldM3(nn.Module):
             unit="batch",
             leave=False,
         ):
-            t = torch.rand(len(p_1), 1, 1).to(device)
+            t = torch.rand(len(p_1), 1, 1, device=device)
             p_0, p_1 = p_0.to(device), p_1.to(device)
-            A_t = self.m3.get_mav_generator(p_0, p_1)
-            g_t = self.m3.se3.exp(t * A_t)
-            p_t = self.m3.act(g_t, p_0)
-            a_t = self.m3.se3.lie_algebra_components(A_t)
+            A_t = self.h.get_generator(p_0, p_1)
+            g_t = self.h.G.exp(t * A_t)
+            p_t = self.h.act(g_t, p_0)
+            a_t = self.h.G.lie_algebra_components(A_t)
             optimizer.zero_grad()
             batch_loss = loss(self(p_t, t), a_t)
             losses[i] = float(batch_loss.cpu().item())
@@ -601,7 +602,7 @@ class FlowFieldPowerGroup(nn.Module):
             unit="batch",
             leave=False,
         ):
-            t = torch.rand(len(g_1), 1, 1).expand(*g_1.shape[:-1], 1).to(device)
+            t = torch.rand(len(g_1), 1, 1, device=device).expand(*g_1.shape[:-1], 1)
             g_0, g_1 = g_0.to(device), g_1.to(device)
             A_t = self.G.log(self.G.L_inv(g_0, g_1))
             g_t = self.G.L(g_0, self.G.exp(t * A_t))
