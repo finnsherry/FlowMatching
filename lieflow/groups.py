@@ -497,7 +497,7 @@ class SO3(MatrixGroup):
         Pytorch does not actually have a matrix log built in, but for SO(3) it
         is not too complicated.
         """
-        q = torch.arccos((_trace(R) - 1) / 2)
+        q = _arccos((_trace(R) - 1) / 2)
         return (R - R.transpose(-2, -1)) / (
             2 * torch.sinc(q[..., None, None] / ((1 + ε_stab) * torch.pi))
         )
@@ -602,16 +602,16 @@ class SE3(MatrixGroup):
         t, R = self.get_translation_rotation(g)
         ω = self.so3.log(R, ε_stab=ε_stab)
         ω_vec = self.so3.lie_algebra_components(ω)
-        θ = (ω_vec**2).sum(-1).sqrt()[..., None]
+        θ = (ω_vec**2).sum(-1, keepdim=True).sqrt()
 
         parallel = θ < ε_stab
 
-        K = ω_vec / θ
+        K = (ω_vec / θ).nan_to_num()
 
         t_par = (t * K).sum(-1, keepdim=True) * K
         t_perp = t - t_par
 
-        c = 0.5 * (t_perp + torch.cross(_cotan(θ / 2) * K, t_perp))
+        c = 0.5 * (t_perp + cross_product(_cotan(θ / 2.0) * K, t_perp)).nan_to_num()
 
         return c * ~parallel, t * parallel + t_par * ~parallel, ω, R
 
@@ -687,7 +687,8 @@ class M3(HomogeneousSpace):
           Geometric Science of Information (2025).
           DOI:10.1007/978-3-032-03918-7_4.
         """
-        generator = self.generator if generator is None else generator
+        if generator is None:
+            generator = self.generator
         shape = torch.broadcast_shapes(p_1.shape, p_2.shape)[:-2]
         device = p_2.device
         x_1, n_1 = self.get_position_orientation(p_1)
@@ -716,7 +717,7 @@ class M3(HomogeneousSpace):
         ω_mav = (ω_vec_mav[..., None, None] * self.se3.so3.lie_algebra_basis).sum(-3)
 
         A = torch.zeros(*shape, 4, 4, device=device)
-        match self.generator:
+        match generator:
             case "mav":
                 return self.se3.pack_translation_rotation(
                     A,
@@ -755,95 +756,6 @@ class M3(HomogeneousSpace):
 
     def act(self, g, p):
         return g @ p
-
-    def get_mav_generator(self, p_1, p_2, ε_stab=0.001):
-        """
-        Compute the minimum angular velocity (mav) generator between `p_1` and
-        `p_2` [1, Prop. 1].
-
-        References:
-          [1]: G. Bellaard and B.M.N. Smets. "Roto-Translation Invariant Metrics
-          on Position-Orientation Space." 7th International Conference on
-          Geometric Science of Information (2025).
-          DOI:10.1007/978-3-032-03918-7_4.
-        """
-        shape = torch.broadcast_shapes(p_1.shape, p_2.shape)[:-2]
-        device = p_2.device
-        x_1, n_1 = self.get_position_orientation(p_1)
-        x_2, n_2 = self.get_position_orientation(p_2)
-
-        cross_n = cross_product(n_1, n_2)
-        sinθ = cross_n.norm(dim=-1, keepdim=True)
-        cosθ = (n_1 * n_2).sum(-1, keepdim=True)
-        θ = torch.atan2(sinθ, cosθ)
-        parallel = θ < ε_stab
-
-        k0 = (cross_product(n_1, n_2) / sinθ).nan_to_num()
-        k0 = k0 * ~parallel + torch.zeros_like(k0) * parallel
-        x_m = (x_1 + x_2) / 2.0
-        x_diff = x_2 - x_1
-        x_perp = (k0 * x_diff).sum(-1, keepdim=True) * k0
-        x_par = x_diff - x_perp
-
-        c = (x_m + 0.5 * _cotan(θ / 2.0) * cross_product(k0, x_par)).nan_to_num()
-        v = x_perp
-
-        ω_vec = θ * k0
-        ω = (ω_vec[..., None, None] * self.se3.so3.lie_algebra_basis).sum(-3)
-
-        A = torch.zeros(*shape, 4, 4, device=device)
-        return self.se3.pack_translation_rotation(
-            A,
-            x_diff * parallel + (-cross_product(ω_vec, c) + v) * ~parallel,
-            ω * ~parallel[..., None],
-        )
-
-    def get_pure_rotation_generator(self, p_1, p_2, ε_stab=0.001):
-        """
-        Compute the pure rotation generator between `p_1` and `p_2` [1, Prop. 1].
-
-        References:
-          [1]: G. Bellaard and B.M.N. Smets. "Roto-Translation Invariant Metrics
-          on Position-Orientation Space." 7th International Conference on
-          Geometric Science of Information (2025).
-          DOI:10.1007/978-3-032-03918-7_4.
-        """
-        shape = torch.broadcast_shapes(p_1.shape, p_2.shape)[:-2]
-        device = p_2.device
-        x_1, n_1 = self.get_position_orientation(p_1)
-        x_2, n_2 = self.get_position_orientation(p_2)
-
-        cross_n = cross_product(n_1, n_2)
-        sinθ = cross_n.norm(dim=-1, keepdim=True)
-        cosθ = (n_1 * n_2).sum(-1, keepdim=True)
-        θ = torch.atan2(sinθ, cosθ)
-        parallel = θ < ε_stab
-
-        x_m = (x_1 + x_2) / 2.0
-        x_diff = x_2 - x_1
-        # if x_diff.norm(dim=-1) < ε_stab:
-        #     return self.get_mav_generator(p_1, p_2, ε_stab=ε_stab)
-        k = cross_product(x_diff, n_2 - n_1)
-        k = (k / k.norm(dim=-1, keepdim=True)).nan_to_num()
-        n_1p = n_1 - (k * n_1).sum(-1, keepdim=True) * k
-        n_2p = n_2 - (k * n_2).sum(-1, keepdim=True) * k
-        θ = torch.atan2(
-            (k * cross_product(n_1p, n_2p)).sum(-1, keepdim=True),
-            (n_1p * n_2p).sum(-1, keepdim=True),
-        )
-
-        x_par = x_diff
-        c = (x_m + 0.5 * _cotan(θ / 2.0) * cross_product(k, x_par)).nan_to_num()
-
-        ω_vec = θ * k
-        ω = (ω_vec[..., None, None] * self.se3.so3.lie_algebra_basis).sum(-3)
-
-        A = torch.zeros(*shape, 4, 4, device=device)
-        return self.se3.pack_translation_rotation(
-            A,
-            x_diff * parallel + (-cross_product(ω_vec, c)) * ~parallel,
-            ω * ~parallel[..., None],
-        )
 
     def get_position_orientation(self, p):
         x = p[..., :3, -2]
@@ -889,6 +801,10 @@ def cross_product(x, y):
 
 def _cotan(x):
     return 1 / torch.tan(x)
+
+
+def _arccos(x):
+    return torch.arccos(_sigmoid(x))
 
 
 def _sigmoid(x, scale=88.0):
