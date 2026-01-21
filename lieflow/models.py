@@ -29,6 +29,7 @@ References:
 import torch
 import torch.nn as nn
 import numpy as np
+from functools import partial
 from tqdm.auto import tqdm
 from lieflow.groups import Group, MatrixGroup, HomogeneousSpace
 
@@ -653,10 +654,7 @@ class LogarithmicDistance(nn.Module):
     def __init__(self, w):
         super().__init__()
         self.w = w
-        self.ρ = lambda A_1, A_2: self.ρ_c_normalised(A_1, A_2, w)
-
-    def ρ_c_normalised(self, A_1, A_2, w):
-        return (w**2 * (A_2 - A_1) ** 2).mean()
+        self.ρ = partial(ρ_c_normalised, w=w)
 
     def forward(self, pred, target):
         return self.ρ(pred, target)
@@ -669,10 +667,7 @@ class PermutationInvariantLogarithmicDistance(nn.Module):
     def __init__(self, w):
         super().__init__()
         self.w = w
-        self.ρ = lambda A_1, A_2: self.ρ_c_normalised(A_1, A_2, w)
-
-    def ρ_c_normalised(self, A_1, A_2, w):
-        return (w**2 * (A_2 - A_1) ** 2).mean()
+        self.ρ = partial(ρ_c_normalised, w=w)
 
     def forward(self, pred, target):
         pred_norms = torch.norm(pred, dim=-1)
@@ -690,3 +685,7 @@ class PermutationInvariantLogarithmicDistance(nn.Module):
 
     def __repr__(self):
         return f"LogarithmicDistance{tuple(self.w.numpy())}"
+
+
+def ρ_c_normalised(A_1, A_2, w):
+    return (w**2 * (A_2 - A_1) ** 2).mean()
