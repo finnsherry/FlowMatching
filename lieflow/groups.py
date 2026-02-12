@@ -20,7 +20,7 @@ Also provides four example implementations of
   4. `SO3()` <: `MatrixGroup`: special orthogonal group of rotations on R^3.
 """
 
-from abc import ABC
+from abc import ABC, abstractmethod
 import torch
 
 
@@ -34,28 +34,32 @@ class Group(ABC):
     inverse, exponential, and logarithm.
     """
 
-    def __init__(self):
+    def __init__(self, dim: int):
         super().__init__()
-        self.dim = None
+        self.dim = dim
 
+    @abstractmethod
     def L(self, g_1, g_2):
         """
         Left multiplication of `g_2` by `g_1`, i.e. `g_1 + g_2`.
         """
         raise NotImplementedError
 
+    @abstractmethod
     def L_inv(self, g_1, g_2):
         """
         Left multiplication of `g_2` by `g_1^-1`, i.e. `g_2 - g_1`.
         """
         raise NotImplementedError
 
+    @abstractmethod
     def log(self, g):
         """
         Lie group logarithm of `g`, i.e. `g`.
         """
         raise NotImplementedError
 
+    @abstractmethod
     def exp(self, A):
         """
         Lie group exponential of `A`, i.e. `A`.
@@ -72,8 +76,7 @@ class Rn(Group):
     """
 
     def __init__(self, n):
-        super().__init__()
-        self.dim = n
+        super().__init__(dim=n)
 
     def L(self, g_1, g_2):
         """
@@ -109,8 +112,7 @@ class SE2(Group):
     """
 
     def __init__(self):
-        super().__init__()
-        self.dim = 3
+        super().__init__(dim=3)
 
     def L(self, g_1, g_2):
         """
@@ -222,8 +224,7 @@ class SE2byRn(Group):
     """
 
     def __init__(self, se2: SE2, rn: Rn):
-        super().__init__()
-        self.dim = se2.dim + rn.dim
+        super().__init__(dim=se2.dim + rn.dim)
         self.se2 = se2
         self.rn = rn
 
@@ -280,8 +281,7 @@ class TSn(Group):
     """
 
     def __init__(self, n):
-        super().__init__()
-        self.dim = n + 1
+        super().__init__(dim=n + 1)
 
     def L(self, g_1, g_2):
         """
@@ -350,8 +350,7 @@ class RmbyTSn(Group):
     """
 
     def __init__(self, rm: Rn, tsn: TSn):
-        super().__init__()
-        self.dim = rm.dim + tsn.dim
+        super().__init__(dim=rm.dim + tsn.dim)
         self.rm = rm
         self.tsn = tsn
 
@@ -417,11 +416,11 @@ class MatrixGroup(ABC):
     logarithm, this must be provided.
     """
 
-    def __init__(self):
+    def __init__(self, dim: int, mat_dim: int, lie_algebra_basis):
         super().__init__()
-        self.dim = None
-        self.mat_dim = None
-        self.lie_algebra_basis = None
+        self.dim = dim
+        self.mat_dim = mat_dim
+        self.lie_algebra_basis = lie_algebra_basis
 
     def L(self, R_1, R_2):
         """
@@ -435,6 +434,7 @@ class MatrixGroup(ABC):
         """
         return torch.linalg.solve(R_1, R_2)
 
+    @abstractmethod
     def log(self, R):
         """
         Lie group logarithm of `R`, i.e. `A` in Lie algebra such that
@@ -452,6 +452,7 @@ class MatrixGroup(ABC):
         """
         return torch.matrix_exp(A)
 
+    @abstractmethod
     def lie_algebra_components(self, A):
         """
         Compute the components of Lie algebra basis `A` with respect to the
@@ -466,27 +467,28 @@ class SO3(MatrixGroup):
     """
 
     def __init__(self):
-        super().__init__()
-        self.dim = 3
-        self.mat_dim = 3 * 3
-        self.lie_algebra_basis = torch.Tensor(
-            [
+        super().__init__(
+            dim=3,
+            mat_dim=3 * 3,
+            lie_algebra_basis=torch.Tensor(
                 [
-                    [0.0, 0.0, 0.0],
-                    [0.0, 0.0, -1.0],
-                    [0.0, 1.0, 0.0],
-                ],
-                [
-                    [0.0, 0.0, 1.0],
-                    [0.0, 0.0, 0.0],
-                    [-1.0, 0.0, 0.0],
-                ],
-                [
-                    [0.0, -1.0, 0.0],
-                    [1.0, 0.0, 0.0],
-                    [0.0, 0.0, 0.0],
-                ],
-            ]
+                    [
+                        [0.0, 0.0, 0.0],
+                        [0.0, 0.0, -1.0],
+                        [0.0, 1.0, 0.0],
+                    ],
+                    [
+                        [0.0, 0.0, 1.0],
+                        [0.0, 0.0, 0.0],
+                        [-1.0, 0.0, 0.0],
+                    ],
+                    [
+                        [0.0, -1.0, 0.0],
+                        [1.0, 0.0, 0.0],
+                        [0.0, 0.0, 0.0],
+                    ],
+                ]
+            ),
         )
 
     def log(self, R, ε_stab=0.001):
@@ -531,48 +533,49 @@ class SE3(MatrixGroup):
     """
 
     def __init__(self):
-        super().__init__()
-        self.dim = 6
-        self.mat_dim = 4 * 4
-        self.lie_algebra_basis = torch.Tensor(
-            [
+        super().__init__(
+            dim=6,
+            mat_dim=4 * 4,
+            lie_algebra_basis=torch.Tensor(
                 [
-                    [0.0, 0.0, 0.0, 1.0],
-                    [0.0, 0.0, 0.0, 0.0],
-                    [0.0, 0.0, 0.0, 0.0],
-                    [0.0, 0.0, 0.0, 0.0],
-                ],
-                [
-                    [0.0, 0.0, 0.0, 0.0],
-                    [0.0, 0.0, 0.0, 1.0],
-                    [0.0, 0.0, 0.0, 0.0],
-                    [0.0, 0.0, 0.0, 0.0],
-                ],
-                [
-                    [0.0, 0.0, 0.0, 0.0],
-                    [0.0, 0.0, 0.0, 0.0],
-                    [0.0, 0.0, 0.0, 1.0],
-                    [0.0, 0.0, 0.0, 0.0],
-                ],
-                [
-                    [0.0, 0.0, 0.0, 0.0],
-                    [0.0, 0.0, -1.0, 0.0],
-                    [0.0, 1.0, 0.0, 0.0],
-                    [0.0, 0.0, 0.0, 0.0],
-                ],
-                [
-                    [0.0, 0.0, 1.0, 0.0],
-                    [0.0, 0.0, 0.0, 0.0],
-                    [-1.0, 0.0, 0.0, 0.0],
-                    [0.0, 0.0, 0.0, 0.0],
-                ],
-                [
-                    [0.0, -1.0, 0.0, 0.0],
-                    [1.0, 0.0, 0.0, 0.0],
-                    [0.0, 0.0, 0.0, 0.0],
-                    [0.0, 0.0, 0.0, 0.0],
-                ],
-            ]
+                    [
+                        [0.0, 0.0, 0.0, 1.0],
+                        [0.0, 0.0, 0.0, 0.0],
+                        [0.0, 0.0, 0.0, 0.0],
+                        [0.0, 0.0, 0.0, 0.0],
+                    ],
+                    [
+                        [0.0, 0.0, 0.0, 0.0],
+                        [0.0, 0.0, 0.0, 1.0],
+                        [0.0, 0.0, 0.0, 0.0],
+                        [0.0, 0.0, 0.0, 0.0],
+                    ],
+                    [
+                        [0.0, 0.0, 0.0, 0.0],
+                        [0.0, 0.0, 0.0, 0.0],
+                        [0.0, 0.0, 0.0, 1.0],
+                        [0.0, 0.0, 0.0, 0.0],
+                    ],
+                    [
+                        [0.0, 0.0, 0.0, 0.0],
+                        [0.0, 0.0, -1.0, 0.0],
+                        [0.0, 1.0, 0.0, 0.0],
+                        [0.0, 0.0, 0.0, 0.0],
+                    ],
+                    [
+                        [0.0, 0.0, 1.0, 0.0],
+                        [0.0, 0.0, 0.0, 0.0],
+                        [-1.0, 0.0, 0.0, 0.0],
+                        [0.0, 0.0, 0.0, 0.0],
+                    ],
+                    [
+                        [0.0, -1.0, 0.0, 0.0],
+                        [1.0, 0.0, 0.0, 0.0],
+                        [0.0, 0.0, 0.0, 0.0],
+                        [0.0, 0.0, 0.0, 0.0],
+                    ],
+                ]
+            ),
         )
         self.so3 = SO3()
 
@@ -652,14 +655,16 @@ class HomogeneousSpace(ABC):
     `MatrixGroup`.
     """
 
-    def __init__(self):
+    def __init__(self, G: MatrixGroup, mat_dim: int):
         super().__init__()
-        self.G: MatrixGroup = None
-        self.mat_dim = None
+        self.G = G
+        self.mat_dim = mat_dim
 
+    @abstractmethod
     def get_generator(self, p_1, p_2):
         raise NotImplementedError
 
+    @abstractmethod
     def act(self, g, p):
         raise NotImplementedError
 
@@ -670,10 +675,8 @@ class M3(HomogeneousSpace):
     """
 
     def __init__(self, generator="mav"):
-        super().__init__()
         self.se3 = SE3()
-        self.G = self.se3
-        self.mat_dim = 4 * 2
+        super().__init__(G=self.se3, mat_dim=4 * 2)
         self.generator = generator
 
     def get_generator(self, p_1, p_2, ε_stab=0.001, generator=None):
@@ -740,13 +743,45 @@ class M3(HomogeneousSpace):
 
                 ω_vec = θ * k
                 ω = (ω_vec[..., None, None] * self.se3.so3.lie_algebra_basis).sum(-3)
-                print(use_mav.shape, parallel.shape)
 
                 return self.se3.pack_translation_rotation(
                     A,
                     x_diff * parallel
                     + (
                         -cross_product(ω_vec, c) * ~use_mav
+                        + (-cross_product(ω_vec_mav, c_mav) + v_mav) * use_mav
+                    )
+                    * ~parallel,
+                    (ω * ~use_mav[..., None] + ω_mav * use_mav[..., None])
+                    * ~parallel[..., None],
+                )
+            case float() | int():
+                φ = torch.tensor([generator])
+                khalfπ = (n_1 + n_2) / (n_1 + n_2).norm(
+                    dim=-1, keepdim=True
+                ).nan_to_num()
+                k = torch.cos(φ) * k0 + torch.sin(φ) * khalfπ
+                n_1p = n_1 - (k * n_1).sum(-1, keepdim=True) * k
+                n_2p = n_2 - (k * n_2).sum(-1, keepdim=True) * k
+                θ = torch.atan2(
+                    (k * cross_product(n_1p, n_2p)).sum(-1, keepdim=True),
+                    (n_1p * n_2p).sum(-1, keepdim=True),
+                )
+
+                x_perp = (k * x_diff).sum(-1, keepdim=True) * k
+                x_par = x_diff - x_perp
+
+                c = (x_m + 0.5 * _cotan(θ / 2.0) * cross_product(k, x_par)).nan_to_num()
+                v = x_perp
+
+                ω_vec = θ * k
+                ω = (ω_vec[..., None, None] * self.se3.so3.lie_algebra_basis).sum(-3)
+
+                return self.se3.pack_translation_rotation(
+                    A,
+                    x_diff * parallel
+                    + (
+                        (-cross_product(ω_vec, c) + v) * ~use_mav
                         + (-cross_product(ω_vec_mav, c_mav) + v_mav) * use_mav
                     )
                     * ~parallel,
