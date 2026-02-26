@@ -21,6 +21,7 @@ Also provides four example implementations of
 """
 
 from abc import ABC, abstractmethod
+from typing import Literal
 import torch
 
 
@@ -39,28 +40,28 @@ class Group(ABC):
         self.dim = dim
 
     @abstractmethod
-    def L(self, g_1, g_2):
+    def L(self, g_1: torch.Tensor, g_2: torch.Tensor) -> torch.Tensor:
         """
         Left multiplication of `g_2` by `g_1`, i.e. `g_1 + g_2`.
         """
         raise NotImplementedError
 
     @abstractmethod
-    def L_inv(self, g_1, g_2):
+    def L_inv(self, g_1: torch.Tensor, g_2: torch.Tensor) -> torch.Tensor:
         """
         Left multiplication of `g_2` by `g_1^-1`, i.e. `g_2 - g_1`.
         """
         raise NotImplementedError
 
     @abstractmethod
-    def log(self, g):
+    def log(self, g: torch.Tensor) -> torch.Tensor:
         """
         Lie group logarithm of `g`, i.e. `g`.
         """
         raise NotImplementedError
 
     @abstractmethod
-    def exp(self, A):
+    def exp(self, A: torch.Tensor) -> torch.Tensor:
         """
         Lie group exponential of `A`, i.e. `A`.
         """
@@ -422,20 +423,20 @@ class MatrixGroup(ABC):
         self.mat_dim = mat_dim
         self.lie_algebra_basis = lie_algebra_basis
 
-    def L(self, R_1, R_2):
+    def L(self, R_1: torch.Tensor, R_2: torch.Tensor) -> torch.Tensor:
         """
         Left multiplication of `R_2` by `R_1`.
         """
         return R_1 @ R_2
 
-    def L_inv(self, R_1, R_2):
+    def L_inv(self, R_1: torch.Tensor, R_2: torch.Tensor) -> torch.Tensor:
         """
         Left multiplication of `R_2` by `R_1^-1`.
         """
         return torch.linalg.solve(R_1, R_2)
 
     @abstractmethod
-    def log(self, R):
+    def log(self, R: torch.Tensor) -> torch.Tensor:
         """
         Lie group logarithm of `R`, i.e. `A` in Lie algebra such that
         `exp(A) = R`.
@@ -445,7 +446,7 @@ class MatrixGroup(ABC):
         """
         raise NotImplementedError
 
-    def exp(self, A):
+    def exp(self, A: torch.Tensor) -> torch.Tensor:
         """
         Lie group exponential of `A`, i.e. `R` in Lie group such that
         `exp(A) = R`.
@@ -453,7 +454,7 @@ class MatrixGroup(ABC):
         return torch.matrix_exp(A)
 
     @abstractmethod
-    def lie_algebra_components(self, A):
+    def lie_algebra_components(self, A: torch.Tensor) -> torch.Tensor:
         """
         Compute the components of Lie algebra basis `A` with respect to the
         basis given by `self.lie_algebra_basis`.
@@ -661,11 +662,11 @@ class HomogeneousSpace(ABC):
         self.mat_dim = mat_dim
 
     @abstractmethod
-    def get_generator(self, p_1, p_2):
+    def get_generator(self, p_1: torch.Tensor, p_2: torch.Tensor) -> torch.Tensor:
         raise NotImplementedError
 
     @abstractmethod
-    def act(self, g, p):
+    def act(self, g: torch.Tensor, p: torch.Tensor) -> torch.Tensor:
         raise NotImplementedError
 
 
@@ -674,12 +675,18 @@ class M3(HomogeneousSpace):
     Position-Orientation space on 3D Euclidean space.
     """
 
-    def __init__(self, generator="mav"):
+    def __init__(self, generator: Literal["mav", "pure_rotation"] | float = "mav"):
         self.se3 = SE3()
         super().__init__(G=self.se3, mat_dim=4 * 2)
         self.generator = generator
 
-    def get_generator(self, p_1, p_2, ε_stab=0.001, generator=None):
+    def get_generator(
+        self,
+        p_1,
+        p_2,
+        ε_stab=0.001,
+        generator: Literal["mav", "pure_rotation"] | float | None = None,
+    ):
         """
         Compute a generator between `p_1` and `p_2` [1, Prop. 1].
         Choose either the `mav` or the `pure_rotation` generator.
@@ -816,11 +823,11 @@ def _mod_offset(x, period, offset):
     return x - (x - offset) // period * period
 
 
-def _trace(R):
+def _trace(R: torch.Tensor) -> torch.Tensor:
     return R.diagonal(offset=0, dim1=-1, dim2=-2).sum(-1)
 
 
-def _expc(x):
+def _expc(x: torch.Tensor) -> torch.Tensor:
     """Compute `x / (exp(x) - 1)`."""
     return torch.where(
         x.abs() < 1.0,
@@ -829,18 +836,18 @@ def _expc(x):
     )
 
 
-def cross_product(x, y):
+def cross_product(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
     shape = torch.broadcast_shapes(x.shape, y.shape)
     return torch.linalg.cross(x.expand(shape), y.expand(shape))
 
 
-def _cotan(x):
+def _cotan(x: torch.Tensor) -> torch.Tensor:
     return 1 / torch.tan(x)
 
 
-def _arccos(x):
+def _arccos(x: torch.Tensor) -> torch.Tensor:
     return torch.arccos(_sigmoid(x))
 
 
-def _sigmoid(x, scale=88.0):
+def _sigmoid(x: torch.Tensor, scale=88.0) -> torch.Tensor:
     return scale * torch.tanh(x / scale)

@@ -35,20 +35,20 @@ from lieflow.groups import Group, MatrixGroup, HomogeneousSpace
 
 
 def get_model_FM(
-    G: Group | MatrixGroup,
-    L=2,
-    power_group=False,
-    H=64,
-    embed_dim=256,
-    num_heads=8,
-    expansion=4,
+    G: Group | MatrixGroup | HomogeneousSpace,
+    L: int = 2,
+    power_group: bool = False,
+    H: int = 64,
+    embed_dim: int = 256,
+    num_heads: int = 8,
+    expansion: int = 4,
 ):
     """
     Return an instance of a flow matching model corresponding to the type of
     `G`.
 
     Args:
-        `G`: group of type `Group` or `MatrixGroup`.
+        `G`: group of type `Group` or `MatrixGroup`, or a `HomogeneousSpace`.
       Optional:
         `L`: depth of the network: number of layers - 2. Defaults to 2.
         `power_group`: boolean describing whether data live in the group `G`
@@ -73,10 +73,12 @@ def get_model_FM(
     elif isinstance(G, HomogeneousSpace):
         return FlowFieldHomogeneousSpace(G, H=H, L=L)
     else:
-        raise ValueError(f"{G} is neither a `Group` nor a `Matrix Group`!")
+        raise ValueError(
+            f"{G} is neither a `Group`, a `MatrixGroup`, nor a  `HomogeneousSpace`!"
+        )
 
 
-def get_model_SCFM(G: Group | MatrixGroup, H=64, L=2):
+def get_model_SCFM(G: Group | MatrixGroup, H: int = 64, L: int = 2):
     """
     Return an instance of a shortcut model corresponding to the type of `G`.
 
@@ -91,7 +93,7 @@ def get_model_SCFM(G: Group | MatrixGroup, H=64, L=2):
     elif isinstance(G, MatrixGroup):
         return ShortCutFieldMatrixGroup(G, H=H, L=L)
     else:
-        raise ValueError(f"{G} is neither a `Group` nor a `Matrix Group`!")
+        raise ValueError(f"{G} is neither a `Group` nor a `MatrixGroup`!")
 
 
 class FlowFieldGroup(nn.Module):
@@ -114,7 +116,7 @@ class FlowFieldGroup(nn.Module):
           DOI:10.1007/978-3-032-03918-7_6.
     """
 
-    def __init__(self, G: Group, H=64, L=2):
+    def __init__(self, G: Group, H: int = 64, L: int = 2):
         super().__init__()
         self.G = G
         self.network = nn.Sequential(
@@ -130,14 +132,18 @@ class FlowFieldGroup(nn.Module):
             nn.Linear(H, G.dim),
         )
 
-    def forward(self, g_t, t):
+    def forward(self, g_t: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         return self.network(torch.cat((g_t, t), dim=-1))
 
-    def step(self, g_t, t, Δt):
+    def step(
+        self, g_t: torch.Tensor, t: torch.Tensor, Δt: torch.Tensor
+    ) -> torch.Tensor:
         t = t.view(1, 1).expand(g_t.shape[0], 1)
         return self.G.L(g_t, self.G.exp(Δt * self(g_t, t)))
 
-    def step_back(self, g_t, t, Δt):
+    def step_back(
+        self, g_t: torch.Tensor, t: torch.Tensor, Δt: torch.Tensor
+    ) -> torch.Tensor:
         return self.step(g_t, t, -Δt)
 
     def train_network(self, device, train_loader, optimizer, loss):
@@ -188,7 +194,7 @@ class ShortCutFieldGroup(nn.Module):
           DOI:10.1007/978-3-032-03918-7_6.
     """
 
-    def __init__(self, G: Group, H=64, L=2):
+    def __init__(self, G: Group, H: int = 64, L: int = 2):
         super().__init__()
         self.G = G
         self.network = nn.Sequential(
@@ -204,15 +210,21 @@ class ShortCutFieldGroup(nn.Module):
             nn.Linear(H, G.dim),
         )
 
-    def forward(self, g_t, t, Δt):
+    def forward(
+        self, g_t: torch.Tensor, t: torch.Tensor, Δt: torch.Tensor
+    ) -> torch.Tensor:
         return self.network(torch.cat((g_t, t, Δt), dim=-1))
 
-    def step(self, g_t, t, Δt):
+    def step(
+        self, g_t: torch.Tensor, t: torch.Tensor, Δt: torch.Tensor
+    ) -> torch.Tensor:
         t = t.view(1, 1).expand(g_t.shape[0], 1)
         Δt = Δt.view(1, 1).expand(g_t.shape[0], 1)
         return self.G.L(g_t, self.G.exp(Δt * self(g_t, t, Δt)))
 
-    def step_back(self, g_t, t, Δt):
+    def step_back(
+        self, g_t: torch.Tensor, t: torch.Tensor, Δt: torch.Tensor
+    ) -> torch.Tensor:
         return self.step(g_t, t, -Δt)
 
     def train_network(self, device, train_loader, optimizer, loss, k=1 / 4):
@@ -284,7 +296,7 @@ class FlowFieldMatrixGroup(nn.Module):
           DOI:10.1007/978-3-032-03918-7_6.
     """
 
-    def __init__(self, G: MatrixGroup, H=64, L=2):
+    def __init__(self, G: MatrixGroup, H: int = 64, L: int = 2):
         super().__init__()
         self.G = G
         self.network = nn.Sequential(
@@ -300,7 +312,7 @@ class FlowFieldMatrixGroup(nn.Module):
             nn.Linear(H, G.dim),
         )
 
-    def forward(self, R_t, t):
+    def forward(self, R_t: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         return self.network(
             torch.cat(
                 (
@@ -311,7 +323,9 @@ class FlowFieldMatrixGroup(nn.Module):
             )
         )
 
-    def step(self, R_t, t, Δt):
+    def step(
+        self, R_t: torch.Tensor, t: torch.Tensor, Δt: torch.Tensor
+    ) -> torch.Tensor:
         t = t.view(1, 1).expand(R_t.shape[0], 1, 1)
         # Components w.r.t. Lie algebra basis.
         a_t = self(R_t, t)
@@ -319,7 +333,9 @@ class FlowFieldMatrixGroup(nn.Module):
         A_t = (a_t[..., None, None] * basis).sum(-3)
         return self.G.L(R_t, self.G.exp(Δt * A_t))
 
-    def step_back(self, R_t, t, Δt):
+    def step_back(
+        self, R_t: torch.Tensor, t: torch.Tensor, Δt: torch.Tensor
+    ) -> torch.Tensor:
         return self.step(R_t, t, -Δt)
 
     def train_network(self, device, train_loader, optimizer, loss):
@@ -375,7 +391,7 @@ class ShortCutFieldMatrixGroup(nn.Module):
           DOI:10.1007/978-3-032-03918-7_6.
     """
 
-    def __init__(self, G: MatrixGroup, H=64, L=2):
+    def __init__(self, G: MatrixGroup, H: int = 64, L: int = 2):
         super().__init__()
         self.G = G
         self.network = nn.Sequential(
@@ -391,7 +407,9 @@ class ShortCutFieldMatrixGroup(nn.Module):
             nn.Linear(H, G.dim),
         )
 
-    def forward(self, R_t, t, Δt):
+    def forward(
+        self, R_t: torch.Tensor, t: torch.Tensor, Δt: torch.Tensor
+    ) -> torch.Tensor:
         return self.network(
             torch.cat(
                 (
@@ -403,7 +421,9 @@ class ShortCutFieldMatrixGroup(nn.Module):
             )
         )
 
-    def step(self, R_t, t, Δt):
+    def step(
+        self, R_t: torch.Tensor, t: torch.Tensor, Δt: torch.Tensor
+    ) -> torch.Tensor:
         t = t.view(1, 1).expand(R_t.shape[0], 1, 1)
         Δt = Δt.view(1, 1).expand(R_t.shape[0], 1, 1)
         # Components w.r.t. Lie algebra basis.
@@ -412,7 +432,9 @@ class ShortCutFieldMatrixGroup(nn.Module):
         A_t = (a_t[..., None, None] * basis).sum(-3)
         return self.G.L(R_t, self.G.exp(Δt * A_t))
 
-    def step_back(self, R_t, t, Δt):
+    def step_back(
+        self, R_t: torch.Tensor, t: torch.Tensor, Δt: torch.Tensor
+    ) -> torch.Tensor:
         return self.step(R_t, t, -Δt)
 
     def train_network(self, device, train_loader, optimizer, loss, k=1 / 4):
@@ -492,7 +514,7 @@ class FlowFieldHomogeneousSpace(nn.Module):
           DOI:10.1007/978-3-032-03918-7_4.
     """
 
-    def __init__(self, h: HomogeneousSpace, H=64, L=2):
+    def __init__(self, h: HomogeneousSpace, H: int = 64, L: int = 2):
         super().__init__()
         self.h = h
         self.network = nn.Sequential(
@@ -508,15 +530,19 @@ class FlowFieldHomogeneousSpace(nn.Module):
             nn.Linear(H, h.G.dim),
         )
 
-    def forward(self, p_t, t):
+    def forward(self, p_t: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         return self.network(torch.cat((p_t.flatten(-2, -1), t.flatten(-2, -1)), dim=-1))
 
-    def step(self, p_t, t, Δt):
+    def step(
+        self, p_t: torch.Tensor, t: torch.Tensor, Δt: torch.Tensor
+    ) -> torch.Tensor:
         t = t.view(1, 1).expand(len(p_t), 1, 1)
         A_t = (self(p_t, t)[..., None, None] * self.h.G.lie_algebra_basis).sum(-3)
         return self.h.act(self.h.G.exp(Δt * A_t), p_t)
 
-    def step_back(self, p_t, t, Δt):
+    def step_back(
+        self, p_t: torch.Tensor, t: torch.Tensor, Δt: torch.Tensor
+    ) -> torch.Tensor:
         return self.step(p_t, t, -Δt)
 
     def train_network(self, device, train_loader, optimizer, loss):
@@ -571,7 +597,14 @@ class FlowFieldPowerGroup(nn.Module):
           DOI:10.1007/978-3-032-03918-7_6.
     """
 
-    def __init__(self, G: Group, embed_dim=256, num_heads=8, expansion=4, L=2):
+    def __init__(
+        self,
+        G: Group,
+        embed_dim: int = 256,
+        num_heads: int = 8,
+        expansion: int = 4,
+        L: int = 2,
+    ):
         super().__init__()
         self.G = G
 
@@ -581,14 +614,18 @@ class FlowFieldPowerGroup(nn.Module):
             nn.Linear(embed_dim, G.dim),
         )
 
-    def forward(self, g_t, t):
+    def forward(self, g_t: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         return self.network(torch.cat((g_t, t), dim=-1))
 
-    def step(self, g_t, t, Δt):
+    def step(
+        self, g_t: torch.Tensor, t: torch.Tensor, Δt: torch.Tensor
+    ) -> torch.Tensor:
         t = t.view(1, 1, 1).expand(*g_t.shape[:-1], 1)
         return self.G.L(g_t, self.G.exp(Δt * self(g_t, t)))
 
-    def step_back(self, g_t, t, Δt):
+    def step_back(
+        self, g_t: torch.Tensor, t: torch.Tensor, Δt: torch.Tensor
+    ) -> torch.Tensor:
         return self.step(g_t, t, -Δt)
 
     def train_network(self, device, train_loader, optimizer, loss):
@@ -629,7 +666,7 @@ class EncoderBlock(nn.Module):
         `expansion`: expansion factor in the pointwise feedforward network.
     """
 
-    def __init__(self, embed_dim, num_heads, expansion):
+    def __init__(self, embed_dim: int, num_heads: int, expansion: int):
         super().__init__()
         self.attn = nn.MultiheadAttention(embed_dim, num_heads, batch_first=True)
         self.ln1 = nn.LayerNorm(embed_dim)
@@ -640,7 +677,7 @@ class EncoderBlock(nn.Module):
             nn.Linear(expansion * embed_dim, embed_dim),
         )
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         A, _ = self.attn(x, x, x, need_weights=False)
         x = self.ln1(A + x)
         return self.ln2(x + self.ff(x))
@@ -656,7 +693,7 @@ class LogarithmicDistance(nn.Module):
         self.w = w
         self.ρ = partial(ρ_c_normalised, w=w)
 
-    def forward(self, pred, target):
+    def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.float:
         return self.ρ(pred, target)
 
     def __repr__(self):
@@ -669,7 +706,7 @@ class PermutationInvariantLogarithmicDistance(nn.Module):
         self.w = w
         self.ρ = partial(ρ_c_normalised, w=w)
 
-    def forward(self, pred, target):
+    def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.float:
         pred_norms = torch.norm(pred, dim=-1)
         pred_sorted_indices = torch.argsort(pred_norms, dim=-1)
         pred_sorted = torch.gather(
@@ -687,5 +724,7 @@ class PermutationInvariantLogarithmicDistance(nn.Module):
         return f"LogarithmicDistance{tuple(self.w.numpy())}"
 
 
-def ρ_c_normalised(A_1, A_2, w):
+def ρ_c_normalised(
+    A_1: torch.Tensor, A_2: torch.Tensor, w: torch.Tensor
+) -> torch.Tensor:
     return (w**2 * (A_2 - A_1) ** 2).mean()
