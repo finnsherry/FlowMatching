@@ -738,63 +738,40 @@ class M3(HomogeneousSpace):
             case "pure_rotation":
                 k = cross_product(x_diff, n_2 - n_1)
                 k = (k / k.norm(dim=-1, keepdim=True)).nan_to_num()
-                n_1p = n_1 - (k * n_1).sum(-1, keepdim=True) * k
-                n_2p = n_2 - (k * n_2).sum(-1, keepdim=True) * k
-                θ = torch.atan2(
-                    (k * cross_product(n_1p, n_2p)).sum(-1, keepdim=True),
-                    (n_1p * n_2p).sum(-1, keepdim=True),
-                )
-
-                x_par = x_diff
-                c = (x_m + 0.5 * _cotan(θ / 2.0) * cross_product(k, x_par)).nan_to_num()
-
-                ω_vec = θ * k
-                ω = (ω_vec[..., None, None] * self.se3.so3.lie_algebra_basis).sum(-3)
-
-                return self.se3.pack_translation_rotation(
-                    A,
-                    x_diff * parallel
-                    + (
-                        -cross_product(ω_vec, c) * ~use_mav
-                        + (-cross_product(ω_vec_mav, c_mav) + v_mav) * use_mav
-                    )
-                    * ~parallel,
-                    (ω * ~use_mav[..., None] + ω_mav * use_mav[..., None])
-                    * ~parallel[..., None],
-                )
             case float() | int():
                 φ = torch.tensor([generator])
                 khalfπ = (n_1 + n_2) / (n_1 + n_2).norm(
                     dim=-1, keepdim=True
                 ).nan_to_num()
                 k = torch.cos(φ) * k0 + torch.sin(φ) * khalfπ
-                n_1p = n_1 - (k * n_1).sum(-1, keepdim=True) * k
-                n_2p = n_2 - (k * n_2).sum(-1, keepdim=True) * k
-                θ = torch.atan2(
-                    (k * cross_product(n_1p, n_2p)).sum(-1, keepdim=True),
-                    (n_1p * n_2p).sum(-1, keepdim=True),
-                )
 
-                x_perp = (k * x_diff).sum(-1, keepdim=True) * k
-                x_par = x_diff - x_perp
+        n_1p = n_1 - (k * n_1).sum(-1, keepdim=True) * k
+        n_2p = n_2 - (k * n_2).sum(-1, keepdim=True) * k
+        θ = torch.atan2(
+            (k * cross_product(n_1p, n_2p)).sum(-1, keepdim=True),
+            (n_1p * n_2p).sum(-1, keepdim=True),
+        )
 
-                c = (x_m + 0.5 * _cotan(θ / 2.0) * cross_product(k, x_par)).nan_to_num()
-                v = x_perp
+        x_perp = (k * x_diff).sum(-1, keepdim=True) * k
+        x_par = x_diff - x_perp
 
-                ω_vec = θ * k
-                ω = (ω_vec[..., None, None] * self.se3.so3.lie_algebra_basis).sum(-3)
+        c = (x_m + 0.5 * _cotan(θ / 2.0) * cross_product(k, x_par)).nan_to_num()
+        v = x_perp
 
-                return self.se3.pack_translation_rotation(
-                    A,
-                    x_diff * parallel
-                    + (
-                        (-cross_product(ω_vec, c) + v) * ~use_mav
-                        + (-cross_product(ω_vec_mav, c_mav) + v_mav) * use_mav
-                    )
-                    * ~parallel,
-                    (ω * ~use_mav[..., None] + ω_mav * use_mav[..., None])
-                    * ~parallel[..., None],
-                )
+        ω_vec = θ * k
+        ω = (ω_vec[..., None, None] * self.se3.so3.lie_algebra_basis).sum(-3)
+
+        return self.se3.pack_translation_rotation(
+            A,
+            x_diff * parallel
+            + (
+                (-cross_product(ω_vec, c) + v) * ~use_mav
+                + (-cross_product(ω_vec_mav, c_mav) + v_mav) * use_mav
+            )
+            * ~parallel,
+            (ω * ~use_mav[..., None] + ω_mav * use_mav[..., None])
+            * ~parallel[..., None],
+        )
 
     def act(self, g, p):
         return g @ p
