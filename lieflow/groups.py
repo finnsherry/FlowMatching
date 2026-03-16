@@ -744,6 +744,8 @@ class M3(HomogeneousSpace):
                     dim=-1, keepdim=True
                 ).nan_to_num()
                 k = torch.cos(φ) * k0 + torch.sin(φ) * khalfπ
+            case _:
+                raise ValueError(f"{generator} is not a supported type of generator!")
 
         n_1p = n_1 - (k * n_1).sum(-1, keepdim=True) * k
         n_2p = n_2 - (k * n_2).sum(-1, keepdim=True) * k

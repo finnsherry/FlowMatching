@@ -9,3 +9,5 @@ output/
 old/
 
 test*
+
+.vscode/
