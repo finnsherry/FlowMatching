@@ -169,7 +169,7 @@ class SE2(Group):
 
         cos = torch.cos(θ / 2.0)
         sin = torch.sin(θ / 2.0)
-        sinc = torch.sinc(θ / (2.0 * torch.pi))  # torch.sinc(x) = sin(pi x) / (pi x)
+        sinc = _sinc(θ / 2.0)
 
         A[..., 0] = (x * cos + y * sin) / sinc
         A[..., 1] = (-x * sin + y * cos) / sinc
@@ -188,7 +188,7 @@ class SE2(Group):
 
         cos = torch.cos(c3 / 2.0)
         sin = torch.sin(c3 / 2.0)
-        sinc = torch.sinc(c3 / (2.0 * torch.pi))  # torch.sinc(x) = sin(pi x) / (pi x)
+        sinc = _sinc(c3 / 2.0)
 
         g[..., 0] = (c1 * cos - c2 * sin) * sinc
         g[..., 1] = (c1 * sin + c2 * cos) * sinc
@@ -407,6 +407,105 @@ class RmbyTSn(Group):
         return f"R^{self.rm.dim} x TS({self.tsn.dim})"
 
 
+class Aff2(Group):
+    """
+    Group of affine transformations on R^2.
+    """
+
+    def __init__(self):
+        super().__init__(dim=6)
+
+    def L(self, g_1, g_2):
+        """
+        Left multiplication of `g_2` by `g_1`.
+        """
+        g = torch.zeros(torch.broadcast_shapes(g_1.shape, g_2.shape), device=g_2.device)
+
+        t_1 = g_1[..., :2]
+        A_1 = g_1[..., 2:].view(*g_1.shape[:-1], 2, 2)
+
+        t_2 = g_2[..., :2, None]
+        A_2 = g_2[..., 2:].view(*g_2.shape[:-1], 2, 2)
+
+        g[..., 0:2] = t_1 + (A_1 @ t_2).squeeze(-1)
+        g[..., 2:] = (A_1 @ A_2).view(*g.shape[:-1], 4)
+        return g
+
+    def L_inv(self, g_1, g_2):
+        """
+        Left multiplication of `g_2` by `g_1^-1`.
+        """
+        g = torch.zeros(torch.broadcast_shapes(g_1.shape, g_2.shape), device=g_2.device)
+
+        t_1 = g_1[..., :2, None]
+        A_1 = g_1[..., 2:].view(*g_1.shape[:-1], 2, 2)
+        A_1_inv = torch.linalg.inv(A_1)
+
+        t_2 = g_2[..., :2, None]
+        A_2 = g_2[..., 2:].view(*g_2.shape[:-1], 2, 2)
+
+        g[..., 0:2] = (A_1_inv @ (t_2 - t_1)).squeeze(-1)
+        g[..., 2:] = (A_1_inv @ A_2).flatten(start_dim=-2, end_dim=-1)
+        return g
+
+    def log(self, g):
+        """
+        Lie group logarithm of `g`, i.e. `A` in Lie algebra such that
+        `exp(A) = g`.
+        """
+        A = torch.zeros_like(g)
+        t = g[..., :2]
+        T = g[..., 2:].view(*g.shape[:-1], 2, 2)
+
+        TTT = T.transpose(-1, -2) @ T
+
+        evals, evecs = torch.linalg.eigh(TTT)
+
+        S_inv = evecs @ torch.diag_embed(1.0 / evals.sqrt()) @ evecs.transpose(-1, -2)
+
+        R = T @ S_inv
+        r = _mod_offset(
+            R[..., 1, 0] / torch.sinc(_arccos(R[..., 0, 0]) / torch.pi),
+            2.0 * torch.pi,
+            -torch.pi,
+        )
+
+        log_S = evecs @ torch.diag_embed(evals.log() / 2.0) @ evecs.transpose(-1, -2)
+
+        A[..., :2] = t
+        A[..., 2] = r
+        A[..., 3] = log_S[..., 0, 0]
+        A[..., 4] = log_S[..., 1, 1]
+        A[..., 5] = log_S[..., 0, 1]
+        return A
+
+    def exp(self, A):
+        """
+        Exponential of `A`, i.e. `g` in Lie group such that `exp(A) = g`.
+
+        Notably not the Lie group exponential, since it is not surjective on
+        Aff^+(2).
+        """
+        g = torch.zeros_like(A)
+        t = A[..., :2]
+        r = A[..., 2]
+        s = A[..., 3:]
+        mat_shape = (*g.shape[:-1], 2, 2)
+
+        cos, sin = r.cos(), r.sin()  # [...], [...]
+        R = torch.stack([cos, -sin, sin, cos], dim=-1).view(mat_shape)
+
+        s_1, s_2, s_3 = s[..., 0], s[..., 1], s[..., 2]
+        S = torch.matrix_exp(torch.stack([s_1, s_3, s_3, s_2], dim=-1).view(mat_shape))
+
+        g[..., :2] = t
+        g[..., 2:] = (R @ S).flatten(start_dim=-2, end_dim=-1)
+        return g
+
+    def __repr__(self):
+        return "Aff^+(2)"
+
+
 class MatrixGroup(ABC):
     """
     Class encapsulating basic Lie group and Lie algebra properties for groups
@@ -502,7 +601,7 @@ class SO3(MatrixGroup):
         """
         q = _arccos((_trace(R) - 1) / 2)
         return (R - R.transpose(-2, -1)) / (
-            2 * torch.sinc(q[..., None, None] / ((1 + ε_stab) * torch.pi))
+            2 * _sinc(q[..., None, None], ε_stab=ε_stab)
         )
 
     def exp(self, A, ε_stab=0.001):
@@ -825,7 +924,11 @@ def _cotan(x: torch.Tensor) -> torch.Tensor:
 
 
 def _arccos(x: torch.Tensor) -> torch.Tensor:
-    return torch.arccos(_sigmoid(x))
+    return torch.arccos(torch.clamp(x, -1.0, 1.0))
+
+
+def _sinc(x: torch.Tensor, ε_stab=0.0001) -> torch.Tensor:
+    return torch.sinc(x / ((1 + ε_stab) * torch.pi))
 
 
 def _sigmoid(x: torch.Tensor, scale=88.0) -> torch.Tensor:
