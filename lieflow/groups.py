@@ -3,7 +3,7 @@ groups
 ======
 
 Classes that encapsulate basic Lie group and Lie algebra properties.
-There are two abstract parent classes:
+There are three abstract parent classes:
   1. `Group`: Use this class when the group and algebra can be efficiently
   parametrised with the same number of parameters. Requires implementing
   hand crafted group multiplication, multiplication by inverse, exponential,
@@ -12,12 +12,20 @@ There are two abstract parent classes:
   represented with matrices. Group multiplication, multiplication by
   inverse, and exponential make use of corresponding PyTorch methods. Since
   PyTorch does not implement a matrix logarithm, this must be provided.
-Also provides four example implementations of
+  3. `HomogeneousSpace`: This class is for homogeneous spaces which are acted on
+  by a `MatrixGroup`. Requires implementing the action of the group on the
+  homogeneous space and the computation of generators in the Lie algebra
+  connecting pairs of points in the homogeneous space.
+Also provides example implementations of
   1. `Rn(n)` <: `Group`: n-dimensional translation group R^n.
   2. `SE2()` <: `Group`: special Euclidean group of roto-translations on
   R^2.
-  3. `SE2byRn` <: `Group`: direct product of SE(2) and R^n.
+  3. `SE2byRn(se2, rn)` <: `Group`: direct product of SE(2) and R^n.
   4. `SO3()` <: `MatrixGroup`: special orthogonal group of rotations on R^3.
+  5. `SE3()` <: `MatrixGroup`: special Euclidean group of roto-translations on
+  R^3.
+  6. `M3()` <: `HomogeneousSpace`: position-orientation space R^3 x S^2, which
+  is an SE(3)-homogeneous space.
 """
 
 from abc import ABC, abstractmethod
@@ -427,7 +435,7 @@ class Aff2(Group):
         t_2 = g_2[..., :2, None]
         A_2 = g_2[..., 2:].view(*g_2.shape[:-1], 2, 2)
 
-        g[..., 0:2] = t_1 + (A_1 @ t_2).squeeze(-1)
+        g[..., :2] = t_1 + (A_1 @ t_2).squeeze(-1)
         g[..., 2:] = (A_1 @ A_2).view(*g.shape[:-1], 4)
         return g
 
@@ -444,7 +452,7 @@ class Aff2(Group):
         t_2 = g_2[..., :2, None]
         A_2 = g_2[..., 2:].view(*g_2.shape[:-1], 2, 2)
 
-        g[..., 0:2] = (A_1_inv @ (t_2 - t_1)).squeeze(-1)
+        g[..., :2] = (A_1_inv @ (t_2 - t_1)).squeeze(-1)
         g[..., 2:] = (A_1_inv @ A_2).flatten(start_dim=-2, end_dim=-1)
         return g
 
@@ -464,11 +472,7 @@ class Aff2(Group):
         S_inv = evecs @ torch.diag_embed(1.0 / evals.sqrt()) @ evecs.transpose(-1, -2)
 
         R = T @ S_inv
-        r = _mod_offset(
-            R[..., 1, 0] / torch.sinc(_arccos(R[..., 0, 0]) / torch.pi),
-            2.0 * torch.pi,
-            -torch.pi,
-        )
+        r = torch.atan2(R[..., 1, 0], R[..., 0, 0])
 
         log_S = evecs @ torch.diag_embed(evals.log() / 2.0) @ evecs.transpose(-1, -2)
 
@@ -492,7 +496,7 @@ class Aff2(Group):
         s = A[..., 3:]
         mat_shape = (*g.shape[:-1], 2, 2)
 
-        cos, sin = r.cos(), r.sin()  # [...], [...]
+        cos, sin = r.cos(), r.sin()
         R = torch.stack([cos, -sin, sin, cos], dim=-1).view(mat_shape)
 
         s_1, s_2, s_3 = s[..., 0], s[..., 1], s[..., 2]
@@ -591,7 +595,7 @@ class SO3(MatrixGroup):
             ),
         )
 
-    def log(self, R, ε_stab=0.001):
+    def log(self, R):
         """
         Lie group logarithm of `R`, i.e. `A` in Lie algebra such that
         `exp(A) = R`.
@@ -600,15 +604,14 @@ class SO3(MatrixGroup):
         is not too complicated.
         """
         q = _arccos((_trace(R) - 1) / 2)
-        return (R - R.transpose(-2, -1)) / (
-            2 * _sinc(q[..., None, None], ε_stab=ε_stab)
-        )
+        return (R - R.transpose(-2, -1)) / (2 * _sinc(q[..., None, None]))
 
     def exp(self, A, ε_stab=0.001):
         """Rodrigues formula"""
         A_vec = self.lie_algebra_components(A)
         θ = (A_vec**2).sum(-1).sqrt()[..., None, None]
-        A_norm = torch.where(θ < ε_stab, A, A / θ)
+        # A_norm = torch.where(θ < ε_stab, A, A / θ)
+        A_norm = A / θ
 
         return (
             torch.eye(3) + torch.sin(θ) * A_norm + (1 - torch.cos(θ)) * A_norm @ A_norm
@@ -927,8 +930,8 @@ def _arccos(x: torch.Tensor) -> torch.Tensor:
     return torch.arccos(torch.clamp(x, -1.0, 1.0))
 
 
-def _sinc(x: torch.Tensor, ε_stab=0.0001) -> torch.Tensor:
-    return torch.sinc(x / ((1 + ε_stab) * torch.pi))
+def _sinc(x: torch.Tensor) -> torch.Tensor:
+    return torch.sinc(x / torch.pi)
 
 
 def _sigmoid(x: torch.Tensor, scale=88.0) -> torch.Tensor:
