@@ -752,6 +752,234 @@ class SE3(MatrixGroup):
         return "SE(3)"
 
 
+class SOplus12(MatrixGroup):
+    """
+    Orthochronous Lorentz group on R^{1, 2}.
+    """
+
+    def __init__(self):
+        super().__init__(
+            dim=3,
+            mat_dim=3 * 3,
+            lie_algebra_basis=torch.Tensor(
+                [
+                    [
+                        [0.0, 0.0, 0.0],
+                        [0.0, 0.0, 1.0],
+                        [0.0, -1.0, 0.0],
+                    ],
+                    [
+                        [0.0, 0.0, 1.0],
+                        [0.0, 0.0, 0.0],
+                        [1.0, 0.0, 0.0],
+                    ],
+                    [
+                        [0.0, -1.0, 0.0],
+                        [-1.0, 0.0, 0.0],
+                        [0.0, 0.0, 0.0],
+                    ],
+                ]
+            ),
+        )
+        self.η = torch.tensor(
+            [
+                [1.0, 0.0, 0.0],
+                [0.0, -1.0, 0.0],
+                [0.0, 0.0, -1.0],
+            ]
+        )
+
+    def log(self, Λ, ε_stab=0.0001):
+        """
+        Lie group logarithm of `Λ`, i.e. `A` in Lie algebra such that
+        `exp(A) = Λ`.
+
+        Pytorch does not actually have a matrix log built in, but for SO^+(1, 2) it
+        is not too complicated.
+        """
+        A_tilde = Λ - self.η @ Λ.transpose(-2, -1) @ self.η
+        k_tilde = self.lie_algebra_components(A_tilde)
+        norm_squared = (k_tilde @ self.η * k_tilde).sum(-1)[..., None, None]
+
+        lightlike = norm_squared.abs() < ε_stab
+        timelike = (norm_squared > 0) * ~lightlike
+        spacelike = (norm_squared < 0) * ~lightlike
+
+        trace_Λ = _trace(Λ)[..., None, None]
+
+        s = torch.where(
+            lightlike,
+            1.0,
+            torch.where(
+                spacelike, _arccosh((5 - trace_Λ) / 2), _arccos((trace_Λ - 1) / 2)
+            ),
+        )
+
+        return torch.where(
+            lightlike,
+            A_tilde / 2.0,
+            torch.where(spacelike, A_tilde / (2 * _sinhc(s)), A_tilde / (2 * _sinc(s))),
+        )
+
+    def exp(self, A, ε_stab=0.0001):
+        """Generalised Rodrigues formula"""
+        A_vec = self.lie_algebra_components(A)
+        s_squared = (A_vec @ self.η * A_vec).sum(-1)[..., None, None]
+
+        lightlike = s_squared.abs() < ε_stab
+        timelike = (s_squared > 0) * ~lightlike
+        spacelike = (s_squared < 0) * ~lightlike
+
+        θ = s_squared.abs().sqrt()
+
+        A_norm = torch.where(lightlike, A, A / θ)
+
+        first_order = (
+            torch.sin(θ) * timelike + 1.0 * lightlike + torch.sinh(θ) * spacelike
+        )
+        second_order = (
+            (1.0 - torch.cos(θ)) * timelike
+            + 0.5 * lightlike
+            + (torch.cosh(θ) - 1.0) * spacelike
+        )
+
+        return torch.eye(3) + first_order * A_norm + second_order * A_norm @ A_norm
+
+    def lie_algebra_components(self, A):
+        """
+        Compute the components of Lie algebra basis `A` with respect to the
+        basis given by `self.lie_algebra_basis`.
+        """
+        return torch.cat(
+            (A[..., 1, 2, None], A[..., 0, 2, None], -A[..., 1, 0, None]), dim=-1
+        )
+
+    def __repr__(self):
+        return "SO^+(1, 2)"
+
+
+class SEplus12(MatrixGroup):
+    """
+    Orthochronous Poincaré group on R^{1,2}.
+    """
+
+    def __init__(self):
+        super().__init__(
+            dim=6,
+            mat_dim=4 * 4,
+            lie_algebra_basis=torch.Tensor(
+                [
+                    [
+                        [0.0, 0.0, 0.0, 1.0],
+                        [0.0, 0.0, 0.0, 0.0],
+                        [0.0, 0.0, 0.0, 0.0],
+                        [0.0, 0.0, 0.0, 0.0],
+                    ],
+                    [
+                        [0.0, 0.0, 0.0, 0.0],
+                        [0.0, 0.0, 0.0, 1.0],
+                        [0.0, 0.0, 0.0, 0.0],
+                        [0.0, 0.0, 0.0, 0.0],
+                    ],
+                    [
+                        [0.0, 0.0, 0.0, 0.0],
+                        [0.0, 0.0, 0.0, 0.0],
+                        [0.0, 0.0, 0.0, 1.0],
+                        [0.0, 0.0, 0.0, 0.0],
+                    ],
+                    [
+                        [0.0, 0.0, 0.0, 0.0],
+                        [0.0, 0.0, -1.0, 0.0],
+                        [0.0, 1.0, 0.0, 0.0],
+                        [0.0, 0.0, 0.0, 0.0],
+                    ],
+                    [
+                        [0.0, 0.0, 1.0, 0.0],
+                        [0.0, 0.0, 0.0, 0.0],
+                        [-1.0, 0.0, 0.0, 0.0],
+                        [0.0, 0.0, 0.0, 0.0],
+                    ],
+                    [
+                        [0.0, -1.0, 0.0, 0.0],
+                        [1.0, 0.0, 0.0, 0.0],
+                        [0.0, 0.0, 0.0, 0.0],
+                        [0.0, 0.0, 0.0, 0.0],
+                    ],
+                ]
+            ),
+        )
+        self.soplus12 = SOplus12()
+
+    def log(self, g, ε_stab=0.001):
+        """
+        Lie group logarithm of `R`, i.e. `A` in Lie algebra such that
+        `exp(A) = R`.
+
+        Pytorch does not actually have a matrix log built in, but for SE(3) it
+        is not too complicated.
+        """
+        A = torch.zeros_like(g)
+        c, t_par, ω = self.get_screw_displacement_generator(g, ε_stab=ε_stab)
+        v = -(ω @ c[..., None])[..., 0] + t_par
+        A = self.pack_translation_rotation(A, v, ω)
+        return A
+
+    def get_screw_displacement(self, g, ε_stab=0.001):
+        c, t_par, _, R = self._get_screw_displacement(g, ε_stab=ε_stab)
+        return c, t_par, R
+
+    def get_screw_displacement_generator(self, g, ε_stab=0.001):
+        c, t_par, ω, _ = self._get_screw_displacement(g, ε_stab=ε_stab)
+        return c, t_par, ω
+
+    def _get_screw_displacement(self, g, ε_stab=0.001):
+        t, R = self.get_translation_rotation(g)
+        ω = self.so3.log(R, ε_stab=ε_stab)
+        ω_vec = self.so3.lie_algebra_components(ω)
+        θ = (ω_vec**2).sum(-1, keepdim=True).sqrt()
+
+        parallel = θ < ε_stab
+
+        K = (ω_vec / θ).nan_to_num()
+
+        t_par = (t * K).sum(-1, keepdim=True) * K
+        t_perp = t - t_par
+
+        c = 0.5 * (t_perp + cross_product(_cotan(θ / 2.0) * K, t_perp)).nan_to_num()
+
+        return c * ~parallel, t * parallel + t_par * ~parallel, ω, R
+
+    def get_translation_rotation(self, g):
+        t = g[..., :3, -1]
+        R = g[..., :3, :3]
+        return t, R
+
+    def pack_translation_rotation(self, g, t, R):
+        g[..., :3, -1] = t
+        g[..., :3, :3] = R
+        return g
+
+    def lie_algebra_components(self, A):
+        """
+        Compute the components of Lie algebra basis `A` with respect to the
+        basis given by `self.lie_algebra_basis`.
+        """
+        return torch.cat(
+            (
+                A[..., 0, 3, None],
+                A[..., 1, 3, None],
+                A[..., 2, 3, None],
+                A[..., 2, 1, None],
+                A[..., 0, 2, None],
+                A[..., 1, 0, None],
+            ),
+            dim=-1,
+        )
+
+    def __repr__(self):
+        return "SE(3)"
+
+
 class HomogeneousSpace(ABC):
     """
     Class encapsulating basic properties of a homogeneous space of a
@@ -922,6 +1150,23 @@ def cross_product(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
     return torch.linalg.cross(x.expand(shape), y.expand(shape))
 
 
+def hyperbolic_cross_product(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+    shape = torch.broadcast_shapes(x.shape, y.shape)
+    z = torch.zeros(*shape, device=x.device)
+
+    x1 = x[..., 0]
+    x2 = x[..., 1]
+    x3 = x[..., 2]
+    y1 = y[..., 0]
+    y2 = y[..., 1]
+    y3 = y[..., 2]
+    z[..., 0] = x2 * y3 - x3 * y2
+    z[..., 1] = x1 * y3 - x3 * y1
+    z[..., 2] = x2 * y1 - x1 * y2
+
+    return z
+
+
 def _cotan(x: torch.Tensor) -> torch.Tensor:
     return 1 / torch.tan(x)
 
@@ -930,8 +1175,18 @@ def _arccos(x: torch.Tensor) -> torch.Tensor:
     return torch.arccos(torch.clamp(x, -1.0, 1.0))
 
 
+def _arccosh(x: torch.Tensor) -> torch.Tensor:
+    return torch.arccosh(torch.clamp_min(x, 1.0))
+
+
 def _sinc(x: torch.Tensor) -> torch.Tensor:
     return torch.sinc(x / torch.pi)
+
+
+def _sinhc(x: torch.Tensor) -> torch.Tensor:
+    return torch.where(
+        x.abs() < 1.0, 1 + x**2 / 6.0 + x**4 / 120.0 + x**6 / 5040, torch.sinh(x) / x
+    )
 
 
 def _sigmoid(x: torch.Tensor, scale=88.0) -> torch.Tensor:
