@@ -811,7 +811,7 @@ class SOplus12(MatrixGroup):
             lightlike,
             1.0,
             torch.where(
-                spacelike, _arccosh((5 - trace_Λ) / 2), _arccos((trace_Λ - 1) / 2)
+                spacelike, _arccosh((trace_Λ - 1) / 2), _arccos((trace_Λ - 1) / 2)
             ),
         )
 
@@ -889,19 +889,19 @@ class SEplus12(MatrixGroup):
                     ],
                     [
                         [0.0, 0.0, 0.0, 0.0],
-                        [0.0, 0.0, -1.0, 0.0],
-                        [0.0, 1.0, 0.0, 0.0],
+                        [0.0, 0.0, 1.0, 0.0],
+                        [0.0, -1.0, 0.0, 0.0],
                         [0.0, 0.0, 0.0, 0.0],
                     ],
                     [
                         [0.0, 0.0, 1.0, 0.0],
                         [0.0, 0.0, 0.0, 0.0],
-                        [-1.0, 0.0, 0.0, 0.0],
+                        [1.0, 0.0, 0.0, 0.0],
                         [0.0, 0.0, 0.0, 0.0],
                     ],
                     [
                         [0.0, -1.0, 0.0, 0.0],
-                        [1.0, 0.0, 0.0, 0.0],
+                        [-1.0, 0.0, 0.0, 0.0],
                         [0.0, 0.0, 0.0, 0.0],
                         [0.0, 0.0, 0.0, 0.0],
                     ],
@@ -912,30 +912,30 @@ class SEplus12(MatrixGroup):
 
     def log(self, g, ε_stab=0.001):
         """
-        Lie group logarithm of `R`, i.e. `A` in Lie algebra such that
-        `exp(A) = R`.
+        Lie group logarithm of `g`, i.e. `A` in Lie algebra such that
+        `exp(A) = g`.
 
-        Pytorch does not actually have a matrix log built in, but for SE(3) it
-        is not too complicated.
+        Pytorch does not actually have a matrix log built in, but for SE^+(1, 2)
+        it is not too complicated.
         """
         A = torch.zeros_like(g)
         c, t_par, ω = self.get_screw_displacement_generator(g, ε_stab=ε_stab)
         v = -(ω @ c[..., None])[..., 0] + t_par
-        A = self.pack_translation_rotation(A, v, ω)
+        A = self.pack_translation_lorentz(A, v, ω)
         return A
 
     def get_screw_displacement(self, g, ε_stab=0.001):
-        c, t_par, _, R = self._get_screw_displacement(g, ε_stab=ε_stab)
-        return c, t_par, R
+        c, t_par, _, Λ = self._get_screw_displacement(g, ε_stab=ε_stab)
+        return c, t_par, Λ
 
     def get_screw_displacement_generator(self, g, ε_stab=0.001):
         c, t_par, ω, _ = self._get_screw_displacement(g, ε_stab=ε_stab)
         return c, t_par, ω
 
     def _get_screw_displacement(self, g, ε_stab=0.001):
-        t, R = self.get_translation_rotation(g)
-        ω = self.so3.log(R, ε_stab=ε_stab)
-        ω_vec = self.so3.lie_algebra_components(ω)
+        t, Λ = self.get_translation_lorentz(g)
+        ω = self.soplus12.log(Λ, ε_stab=ε_stab)
+        ω_vec = self.soplus12.lie_algebra_components(ω)
         θ = (ω_vec**2).sum(-1, keepdim=True).sqrt()
 
         parallel = θ < ε_stab
@@ -947,16 +947,16 @@ class SEplus12(MatrixGroup):
 
         c = 0.5 * (t_perp + cross_product(_cotan(θ / 2.0) * K, t_perp)).nan_to_num()
 
-        return c * ~parallel, t * parallel + t_par * ~parallel, ω, R
+        return c * ~parallel, t * parallel + t_par * ~parallel, ω, Λ
 
-    def get_translation_rotation(self, g):
+    def get_translation_lorentz(self, g):
         t = g[..., :3, -1]
-        R = g[..., :3, :3]
-        return t, R
+        Λ = g[..., :3, :3]
+        return t, Λ
 
-    def pack_translation_rotation(self, g, t, R):
+    def pack_translation_lorentz(self, g, t, Λ):
         g[..., :3, -1] = t
-        g[..., :3, :3] = R
+        g[..., :3, :3] = Λ
         return g
 
     def lie_algebra_components(self, A):
@@ -969,9 +969,9 @@ class SEplus12(MatrixGroup):
                 A[..., 0, 3, None],
                 A[..., 1, 3, None],
                 A[..., 2, 3, None],
-                A[..., 2, 1, None],
+                A[..., 1, 2, None],
                 A[..., 0, 2, None],
-                A[..., 1, 0, None],
+                -A[..., 1, 0, None],
             ),
             dim=-1,
         )
@@ -1019,7 +1019,8 @@ class M3(HomogeneousSpace):
     ):
         """
         Compute a generator between `p_1` and `p_2` [1, Prop. 1].
-        Choose either the `mav` or the `pure_rotation` generator.
+        Choose either the `mav` or the `pure_rotation` generator, or supply a
+        number to select the corresponding rotation axis.
 
         References:
           [1]: G. Bellaard and B.M.N. Smets. "Roto-Translation Invariant Metrics
@@ -1122,6 +1123,124 @@ class M3(HomogeneousSpace):
 
     def __repr__(self):
         return "M3"
+
+
+class P3(HomogeneousSpace):
+    """
+    Position-Orientation space on 3D Lorentzian space.
+    """
+
+    def __init__(self, generator: Literal["mav", "pure_rotation"] | float = "mav"):
+        self.seplus12 = SEplus12()
+        super().__init__(G=self.seplus12, mat_dim=4 * 2)
+        self.generator = generator
+
+    def get_generator(
+        self,
+        p_1,
+        p_2,
+        ε_stab=0.001,
+        generator: Literal["mav", "pure_rotation"] | float | None = None,
+    ):
+        """
+        Compute a generator between `p_1` and `p_2`.
+
+        """
+        if generator is None:
+            generator = self.generator
+        shape = torch.broadcast_shapes(p_1.shape, p_2.shape)[:-2]
+        device = p_2.device
+        x_1, n_1 = self.get_position_orientation(p_1)
+        x_2, n_2 = self.get_position_orientation(p_2)
+        x_m = (x_1 + x_2) / 2.0
+        x_diff = x_2 - x_1
+
+        cross_n = cross_product(n_1, n_2)
+        sinθ = cross_n.norm(dim=-1, keepdim=True)
+        cosθ = (n_1 * n_2).sum(-1, keepdim=True)
+        θ = torch.atan2(sinθ, cosθ)
+        parallel = θ < ε_stab
+
+        k0 = (cross_product(n_1, n_2) / sinθ).nan_to_num()
+        k0 = k0 * ~parallel + torch.zeros_like(k0) * parallel
+        x_m = (x_1 + x_2) / 2.0
+        x_diff = x_2 - x_1
+        use_mav = x_diff.norm(dim=-1, keepdim=True) < ε_stab
+        x_perp = (k0 * x_diff).sum(-1, keepdim=True) * k0
+        x_par = x_diff - x_perp
+
+        c_mav = (x_m + 0.5 * _cotan(θ / 2.0) * cross_product(k0, x_par)).nan_to_num()
+        v_mav = x_perp
+
+        ω_vec_mav = θ * k0
+        ω_mav = (ω_vec_mav[..., None, None] * self.se3.so3.lie_algebra_basis).sum(-3)
+
+        A = torch.zeros(*shape, 4, 4, device=device)
+        match generator:
+            case "mav":
+                return self.se3.pack_translation_rotation(
+                    A,
+                    x_diff * parallel
+                    + (-cross_product(ω_vec_mav, c_mav) + v_mav) * ~parallel,
+                    ω_mav * ~parallel[..., None],
+                )
+            case "pure_rotation":
+                k = cross_product(x_diff, n_2 - n_1)
+                k = (k / k.norm(dim=-1, keepdim=True)).nan_to_num()
+            case float() | int():
+                φ = torch.tensor([generator])
+                khalfπ = (n_1 + n_2) / (n_1 + n_2).norm(
+                    dim=-1, keepdim=True
+                ).nan_to_num()
+                k = torch.cos(φ) * k0 + torch.sin(φ) * khalfπ
+            case _:
+                raise ValueError(f"{generator} is not a supported type of generator!")
+
+        n_1p = n_1 - (k * n_1).sum(-1, keepdim=True) * k
+        n_2p = n_2 - (k * n_2).sum(-1, keepdim=True) * k
+        θ = torch.atan2(
+            (k * cross_product(n_1p, n_2p)).sum(-1, keepdim=True),
+            (n_1p * n_2p).sum(-1, keepdim=True),
+        )
+
+        x_perp = (k * x_diff).sum(-1, keepdim=True) * k
+        x_par = x_diff - x_perp
+
+        c = (x_m + 0.5 * _cotan(θ / 2.0) * cross_product(k, x_par)).nan_to_num()
+        v = x_perp
+
+        ω_vec = θ * k
+        ω = (ω_vec[..., None, None] * self.se3.so3.lie_algebra_basis).sum(-3)
+
+        return self.se3.pack_translation_rotation(
+            A,
+            x_diff * parallel
+            + (
+                (-cross_product(ω_vec, c) + v) * ~use_mav
+                + (-cross_product(ω_vec_mav, c_mav) + v_mav) * use_mav
+            )
+            * ~parallel,
+            (ω * ~use_mav[..., None] + ω_mav * use_mav[..., None])
+            * ~parallel[..., None],
+        )
+
+    def act(self, g, p):
+        return g @ p
+
+    def get_position_orientation(self, p):
+        x = p[..., :3, -2]
+        n = p[..., :3, -1]
+        return x, n
+
+    def pack_position_orientation(self, x, n):
+        p = torch.zeros(*n.shape[:-1], 4, 2, device=n.device)
+        p[..., :3, -2] = x
+        p[..., 3, -2] = 1
+        p[..., :3, -1] = n
+        return p
+
+    def __repr__(self):
+        return "P3"
 
 
 # Utils
