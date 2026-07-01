@@ -919,7 +919,23 @@ class SEplus12(MatrixGroup):
         A = torch.zeros_like(g)
         c, t_par, ω = self.get_screw_displacement_generator(g, ε_stab=ε_stab)
         v = -(ω @ c[..., None])[..., 0] + t_par
-        A = self.pack_translation_lorentz(A, v, ω)
+
+        ω_vec = self.soplus12.lie_algebra_components(ω)
+        s_squared = (ω_vec @ self.soplus12.η * ω_vec).sum(-1, keepdim=True)
+        lightlike = s_squared.abs() < ε_stab
+        t_light = t_par[..., None]
+
+        A = self.pack_translation_lorentz(
+            A,
+            (
+                v * ~lightlike
+                + (t_light - 1.0 / 2.0 * ω @ t_light + 1.0 / 12.0 * ω @ ω @ t_light)[
+                    ..., 0
+                ]
+                * lightlike
+            ),
+            ω,
+        )
         return A
 
     def get_screw_displacement(self, g, ε_stab=0.001):
@@ -942,7 +958,9 @@ class SEplus12(MatrixGroup):
         timelike = (s_squared > 0.0) * ~lightlike
         spacelike = (s_squared < 0.0) * ~lightlike
 
-        t_par = (ω_vec @ self.soplus12.η * t).sum(-1, keepdim=True) / s_squared * ω_vec
+        t_par = (
+            (ω_vec @ self.soplus12.η * t).sum(-1, keepdim=True) / s_squared * ω_vec
+        ).nan_to_num(0)
         t_perp = t - t_par
 
         c_timelike = (
