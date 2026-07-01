@@ -807,18 +807,16 @@ class SOplus12(MatrixGroup):
 
         trace_Λ = _trace(Λ)[..., None, None]
 
-        s = torch.where(
-            lightlike,
-            1.0,
-            torch.where(
-                spacelike, _arccosh((trace_Λ - 1) / 2), _arccos((trace_Λ - 1) / 2)
-            ),
+        s = (
+            1.0 * lightlike
+            + _arccosh((trace_Λ - 1) / 2) * spacelike
+            + _arccos((trace_Λ - 1) / 2) * timelike
         )
 
-        return torch.where(
-            lightlike,
-            A_tilde / 2.0,
-            torch.where(spacelike, A_tilde / (2 * _sinhc(s)), A_tilde / (2 * _sinc(s))),
+        return (
+            A_tilde / 2.0 * lightlike
+            + A_tilde / (2.0 * _sinhc(s)) * spacelike
+            + A_tilde / (2.0 * _sinc(s)) * timelike
         )
 
     def exp(self, A, ε_stab=0.0001):
@@ -827,8 +825,8 @@ class SOplus12(MatrixGroup):
         s_squared = (A_vec @ self.η * A_vec).sum(-1)[..., None, None]
 
         lightlike = s_squared.abs() < ε_stab
-        timelike = (s_squared > 0) * ~lightlike
-        spacelike = (s_squared < 0) * ~lightlike
+        timelike = (s_squared > 0.0) * ~lightlike
+        spacelike = (s_squared < 0.0) * ~lightlike
 
         θ = s_squared.abs().sqrt()
 
@@ -936,18 +934,37 @@ class SEplus12(MatrixGroup):
         t, Λ = self.get_translation_lorentz(g)
         ω = self.soplus12.log(Λ, ε_stab=ε_stab)
         ω_vec = self.soplus12.lie_algebra_components(ω)
-        θ = (ω_vec**2).sum(-1, keepdim=True).sqrt()
 
-        parallel = θ < ε_stab
+        s_squared = (ω_vec @ self.soplus12.η * ω_vec).sum(-1, keepdim=True)
+        s = s_squared.abs().sqrt()
 
-        K = (ω_vec / θ).nan_to_num()
+        lightlike = s_squared.abs() < ε_stab
+        timelike = (s_squared > 0.0) * ~lightlike
+        spacelike = (s_squared < 0.0) * ~lightlike
 
-        t_par = (t * K).sum(-1, keepdim=True) * K
+        t_par = (ω_vec @ self.soplus12.η * t).sum(-1, keepdim=True) / s_squared * ω_vec
         t_perp = t - t_par
 
-        c = 0.5 * (t_perp + cross_product(_cotan(θ / 2.0) * K, t_perp)).nan_to_num()
+        c_timelike = (
+            0.5
+            * (
+                t_perp + hyperbolic_cross_product(_cotan(s / 2.0) * ω_vec / s, t_perp)
+            ).nan_to_num()
+        )
 
-        return c * ~parallel, t * parallel + t_par * ~parallel, ω, Λ
+        c_spacelike = (
+            0.5
+            * (
+                t_perp - hyperbolic_cross_product(_cotanh(s / 2.0) * ω_vec / s, t_perp)
+            ).nan_to_num()
+        )
+
+        return (
+            c_timelike * timelike + c_spacelike * spacelike,
+            t * lightlike + t_par * ~lightlike,
+            ω,
+            Λ,
+        )
 
     def get_translation_lorentz(self, g):
         t = g[..., :3, -1]
@@ -977,7 +994,7 @@ class SEplus12(MatrixGroup):
         )
 
     def __repr__(self):
-        return "SE(3)"
+        return "SE^+(1, 2)"
 
 
 class HomogeneousSpace(ABC):
@@ -1288,6 +1305,10 @@ def hyperbolic_cross_product(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
 
 def _cotan(x: torch.Tensor) -> torch.Tensor:
     return 1 / torch.tan(x)
+
+
+def _cotanh(x: torch.Tensor) -> torch.Tensor:
+    return 1 / torch.tanh(x)
 
 
 def _arccos(x: torch.Tensor) -> torch.Tensor:
