@@ -907,6 +907,7 @@ class SEplus12(MatrixGroup):
             ),
         )
         self.soplus12 = SOplus12()
+        self.η = self.soplus12.η
 
     def log(self, g, ε_stab=0.001):
         """
@@ -921,7 +922,7 @@ class SEplus12(MatrixGroup):
         v = -(ω @ c[..., None])[..., 0] + t_par
 
         ω_vec = self.soplus12.lie_algebra_components(ω)
-        s_squared = (ω_vec @ self.soplus12.η * ω_vec).sum(-1, keepdim=True)
+        s_squared = (ω_vec @ self.η * ω_vec).sum(-1, keepdim=True)
         lightlike = s_squared.abs() < ε_stab
         t_light = t_par[..., None]
 
@@ -951,7 +952,7 @@ class SEplus12(MatrixGroup):
         ω = self.soplus12.log(Λ, ε_stab=ε_stab)
         ω_vec = self.soplus12.lie_algebra_components(ω)
 
-        s_squared = (ω_vec @ self.soplus12.η * ω_vec).sum(-1, keepdim=True)
+        s_squared = (ω_vec @ self.η * ω_vec).sum(-1, keepdim=True)
         s = s_squared.abs().sqrt()
 
         lightlike = s_squared.abs() < ε_stab
@@ -959,7 +960,7 @@ class SEplus12(MatrixGroup):
         spacelike = (s_squared < 0.0) * ~lightlike
 
         t_par = (
-            (ω_vec @ self.soplus12.η * t).sum(-1, keepdim=True) / s_squared * ω_vec
+            (ω_vec @ self.η * t).sum(-1, keepdim=True) / s_squared * ω_vec
         ).nan_to_num(0)
         t_perp = t - t_par
 
@@ -1078,7 +1079,7 @@ class M3(HomogeneousSpace):
         θ = torch.atan2(sinθ, cosθ)
         parallel = θ < ε_stab
 
-        k0 = (cross_product(n_1, n_2) / sinθ).nan_to_num()
+        k0 = (cross_n / sinθ).nan_to_num()
         k0 = k0 * ~parallel + torch.zeros_like(k0) * parallel
         x_m = (x_1 + x_2) / 2.0
         x_diff = x_2 - x_1
@@ -1163,10 +1164,15 @@ class M3(HomogeneousSpace):
 class P3(HomogeneousSpace):
     """
     Position-Orientation space on 3D Lorentzian space.
+
+    We choose P3 := {(x, n) in R^3 x R^3 | ||n|| = 1, nt >= 1}.
+
+    mav? because I don't know if it is mav...
     """
 
-    def __init__(self, generator: Literal["mav", "pure_rotation"] | float = "mav"):
+    def __init__(self, generator: Literal["mav?"] | float = "mav?"):
         self.seplus12 = SEplus12()
+        self.η = self.seplus12.η
         super().__init__(G=self.seplus12, mat_dim=4 * 2)
         self.generator = generator
 
@@ -1175,11 +1181,17 @@ class P3(HomogeneousSpace):
         p_1,
         p_2,
         ε_stab=0.001,
-        generator: Literal["mav", "pure_rotation"] | float | None = None,
+        generator: Literal["mav?"] | float | None = None,
     ):
         """
         Compute a generator between `p_1` and `p_2`.
 
+        Let `p_1 = (x_1, n_1)` and `p_2 = (x_2, n_2)`. Then
+        `generator == "mav?"` gives the generator where the axis of the Lorentz
+        transformation is `n_1 x n_2`. If `generator == φ` for some float `φ`,
+        then the axis of the Lorentz transformation is
+        `cosh(φ)(n_1 x n_2)/||-n_1 x n_2|| - sinh(φ)(n_1 + n_2)/||n_1 + n_2||`,
+        which has norm -1.
         """
         if generator is None:
             generator = self.generator
@@ -1190,69 +1202,105 @@ class P3(HomogeneousSpace):
         x_m = (x_1 + x_2) / 2.0
         x_diff = x_2 - x_1
 
-        cross_n = cross_product(n_1, n_2)
-        sinθ = cross_n.norm(dim=-1, keepdim=True)
-        cosθ = (n_1 * n_2).sum(-1, keepdim=True)
-        θ = torch.atan2(sinθ, cosθ)
-        parallel = θ < ε_stab
+        cross_n = hyperbolic_cross_product(n_1, n_2)
+        norm_squared = (cross_n @ self.η * cross_n).sum(-1, keepdim=True)
+        norm = norm_squared.abs().sqrt()
+        k0 = cross_n / norm.nan_to_num()
 
-        k0 = (cross_product(n_1, n_2) / sinθ).nan_to_num()
+        sinhs = norm
+        coshs = (n_1 @ self.η * n_2).sum(-1, keepdim=True)
+        s = torch.atanh(sinhs / coshs)
+
+        parallel = s.abs() < ε_stab
+
         k0 = k0 * ~parallel + torch.zeros_like(k0) * parallel
         x_m = (x_1 + x_2) / 2.0
         x_diff = x_2 - x_1
         use_mav = x_diff.norm(dim=-1, keepdim=True) < ε_stab
-        x_perp = (k0 * x_diff).sum(-1, keepdim=True) * k0
+        x_perp = -1.0 * (k0 @ self.η * x_diff).sum(-1, keepdim=True) * k0
         x_par = x_diff - x_perp
 
-        c_mav = (x_m + 0.5 * _cotan(θ / 2.0) * cross_product(k0, x_par)).nan_to_num()
+        c_mav = (
+            x_m - 0.5 * _cotanh(s / 2.0) * hyperbolic_cross_product(k0, x_par)
+        ).nan_to_num()
         v_mav = x_perp
 
-        ω_vec_mav = θ * k0
-        ω_mav = (ω_vec_mav[..., None, None] * self.se3.so3.lie_algebra_basis).sum(-3)
+        ω_vec_mav = s * k0
+        ω_mav = (
+            ω_vec_mav[..., None, None] * self.seplus12.soplus12.lie_algebra_basis
+        ).sum(-3)
 
         A = torch.zeros(*shape, 4, 4, device=device)
         match generator:
-            case "mav":
-                return self.se3.pack_translation_rotation(
+            case "mav?":
+                return self.seplus12.pack_translation_lorentz(
                     A,
                     x_diff * parallel
-                    + (-cross_product(ω_vec_mav, c_mav) + v_mav) * ~parallel,
+                    + (-hyperbolic_cross_product(ω_vec_mav, c_mav) + v_mav) * ~parallel,
                     ω_mav * ~parallel[..., None],
                 )
-            case "pure_rotation":
-                k = cross_product(x_diff, n_2 - n_1)
-                k = (k / k.norm(dim=-1, keepdim=True)).nan_to_num()
             case float() | int():
                 φ = torch.tensor([generator])
-                khalfπ = (n_1 + n_2) / (n_1 + n_2).norm(
+                kperp = (n_1 + n_2) / (n_1 + n_2).norm(
                     dim=-1, keepdim=True
                 ).nan_to_num()
-                k = torch.cos(φ) * k0 + torch.sin(φ) * khalfπ
+                norm = (kperp @ self.η * kperp).sum(-1, keepdim=True).sqrt()
+                k = torch.cosh(φ) * k0 - torch.sinh(φ) * kperp / norm
             case _:
                 raise ValueError(f"{generator} is not a supported type of generator!")
 
-        n_1p = n_1 - (k * n_1).sum(-1, keepdim=True) * k
-        n_2p = n_2 - (k * n_2).sum(-1, keepdim=True) * k
-        θ = torch.atan2(
-            (k * cross_product(n_1p, n_2p)).sum(-1, keepdim=True),
-            (n_1p * n_2p).sum(-1, keepdim=True),
-        )
+        n_1p = n_1 + (k @ self.η * n_1).sum(-1, keepdim=True) * k
+        n_2p = n_2 + (k @ self.η * n_2).sum(-1, keepdim=True) * k
 
-        x_perp = (k * x_diff).sum(-1, keepdim=True) * k
+        s = torch.atanh(
+            (k @ self.η * hyperbolic_cross_product(n_1p, n_2p)).sum(-1, keepdim=True)
+            / -(n_1p @ self.η * n_2p).sum(-1, keepdim=True)
+        )
+        print(
+            (
+                (k @ self.η * hyperbolic_cross_product(n_1p, n_2p)).sum(
+                    -1, keepdim=True
+                )
+                / -(n_1p @ self.η * n_2p).sum(-1, keepdim=True)
+            ).max(),
+            (
+                (k @ self.η * hyperbolic_cross_product(n_1p, n_2p)).sum(
+                    -1, keepdim=True
+                )
+                / -(n_1p @ self.η * n_2p).sum(-1, keepdim=True)
+            ).min(),
+        )
+        print(
+            (n_1p @ self.η * n_2p).sum(-1, keepdim=True).max(),
+            (n_1p @ self.η * n_2p).sum(-1, keepdim=True).min(),
+        )
+        print(
+            (k @ self.η * hyperbolic_cross_product(n_1p, n_2p))
+            .sum(-1, keepdim=True)
+            .max(),
+            (k @ self.η * hyperbolic_cross_product(n_1p, n_2p))
+            .sum(-1, keepdim=True)
+            .min(),
+        )
+        print(torch.isnan(s).any())
+
+        x_perp = -1.0 * (k @ self.η * x_diff).sum(-1, keepdim=True) * k
         x_par = x_diff - x_perp
 
-        c = (x_m + 0.5 * _cotan(θ / 2.0) * cross_product(k, x_par)).nan_to_num()
+        c = (
+            x_m - 0.5 * _cotanh(s / 2.0) * hyperbolic_cross_product(k, x_par)
+        ).nan_to_num()
         v = x_perp
 
-        ω_vec = θ * k
-        ω = (ω_vec[..., None, None] * self.se3.so3.lie_algebra_basis).sum(-3)
+        ω_vec = s * k
+        ω = (ω_vec[..., None, None] * self.seplus12.soplus12.lie_algebra_basis).sum(-3)
 
-        return self.se3.pack_translation_rotation(
+        return self.seplus12.pack_translation_lorentz(
             A,
             x_diff * parallel
             + (
-                (-cross_product(ω_vec, c) + v) * ~use_mav
-                + (-cross_product(ω_vec_mav, c_mav) + v_mav) * use_mav
+                (-hyperbolic_cross_product(ω_vec, c) + v) * ~use_mav
+                + (-hyperbolic_cross_product(ω_vec_mav, c_mav) + v_mav) * use_mav
             )
             * ~parallel,
             (ω * ~use_mav[..., None] + ω_mav * use_mav[..., None])
