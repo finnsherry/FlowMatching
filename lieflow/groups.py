@@ -1166,11 +1166,12 @@ class P3(HomogeneousSpace):
     Position-Orientation space on 3D Lorentzian space.
 
     We choose P3 := {(x, n) in R^3 x R^3 | ||n|| = 1, nt >= 1}.
-
-    mav? because I don't know if it is mav...
     """
 
-    def __init__(self, generator: Literal["mav?"] | float = "mav?"):
+    def __init__(
+        self,
+        generator: Literal["timelike", "lightlike", "spacelike"] | float = "spacelike",
+    ):
         self.seplus12 = SEplus12()
         self.η = self.seplus12.η
         super().__init__(G=self.seplus12, mat_dim=4 * 2)
@@ -1181,17 +1182,23 @@ class P3(HomogeneousSpace):
         p_1,
         p_2,
         ε_stab=0.001,
-        generator: Literal["mav?"] | float | None = None,
+        generator: Literal["timelike", "lightlike", "spacelike"] | float | None = None,
     ):
         """
         Compute a generator between `p_1` and `p_2`.
 
         Let `p_1 = (x_1, n_1)` and `p_2 = (x_2, n_2)`. Then
-        `generator == "mav?"` gives the generator where the axis of the Lorentz
-        transformation is `n_1 x n_2`. If `generator == φ` for some float `φ`,
-        then the axis of the Lorentz transformation is
-        `cosh(φ)(n_1 x n_2)/||-n_1 x n_2|| - sinh(φ)(n_1 + n_2)/||n_1 + n_2||`,
-        which has norm -1.
+        - `generator == "spacelike"` gives the generator where the axis `ks` of
+          the Lorentz transformation is the spacelike `n_1 x n_2`, normalised to
+          -1.
+        - `generator == "timelike"` gives the generator where the axis `kt` of
+          the Lorentz transformation is the timelike `n_1 + n_2`, normalised to
+          1.
+        - `generator == "lightlike"` gives the generator where the axis `kl` of
+          the Lorentz transformation is the lightlike `ks + kt`.
+        - `generator == φ` for some float `φ` gives the generator where the axis
+          of the Lorentz transformation is `cosh(φ) ks - sinh(φ) kt`, which has
+          norm -1.
         """
         if generator is None:
             generator = self.generator
@@ -1202,109 +1209,78 @@ class P3(HomogeneousSpace):
         x_m = (x_1 + x_2) / 2.0
         x_diff = x_2 - x_1
 
-        cross_n = hyperbolic_cross_product(n_1, n_2)
-        norm_squared = (cross_n @ self.η * cross_n).sum(-1, keepdim=True)
-        norm = norm_squared.abs().sqrt()
-        k0 = cross_n / norm.nan_to_num()
+        ks = hyperbolic_cross_product(n_1, n_2)
+        ks = ks / (-(ks @ self.η * ks).sum(-1, keepdim=True)).sqrt()
+        kt = n_1 + n_2
+        kt = kt / (kt @ self.η * kt).sum(-1, keepdim=True).sqrt()
 
-        sinhs = norm
-        coshs = (n_1 @ self.η * n_2).sum(-1, keepdim=True)
-        s = torch.atanh(sinhs / coshs)
+        i = (n_1 @ self.η * n_2).sum(-1, keepdim=True)
 
-        parallel = s.abs() < ε_stab
-
-        k0 = k0 * ~parallel + torch.zeros_like(k0) * parallel
-        x_m = (x_1 + x_2) / 2.0
-        x_diff = x_2 - x_1
-        use_mav = x_diff.norm(dim=-1, keepdim=True) < ε_stab
-        x_perp = -1.0 * (k0 @ self.η * x_diff).sum(-1, keepdim=True) * k0
-        x_par = x_diff - x_perp
-
-        c_mav = (
-            x_m - 0.5 * _cotanh(s / 2.0) * hyperbolic_cross_product(k0, x_par)
-        ).nan_to_num()
-        v_mav = x_perp
-
-        ω_vec_mav = s * k0
-        ω_mav = (
-            ω_vec_mav[..., None, None] * self.seplus12.soplus12.lie_algebra_basis
-        ).sum(-3)
-
-        A = torch.zeros(*shape, 4, 4, device=device)
         match generator:
-            case "mav?":
-                return self.seplus12.pack_translation_lorentz(
-                    A,
-                    x_diff * parallel
-                    + (-hyperbolic_cross_product(ω_vec_mav, c_mav) + v_mav) * ~parallel,
-                    ω_mav * ~parallel[..., None],
+            case "spacelike":
+                w = _arccosh(i)
+                k = w * ks
+
+                x_perp = -1.0 * (ks @ self.η * x_diff).sum(-1, keepdim=True) * ks
+                x_par = x_diff - x_perp
+
+                c = (
+                    x_m - 0.5 * _cotanh(w / 2.0) * hyperbolic_cross_product(ks, x_par)
+                ).nan_to_num()
+                v = x_perp
+            case "timelike":
+                θ = torch.tensor([torch.pi])
+                k = θ * kt
+
+                x_perp = (kt @ self.η * x_diff).sum(-1, keepdim=True) * kt
+                x_par = x_diff - x_perp
+
+                c = (
+                    x_m + 0.5 * _cotan(θ / 2.0) * hyperbolic_cross_product(kt, x_par)
+                ).nan_to_num()
+                v = x_perp
+            case "lightlike":
+                s = 2 * ((i - 1.0) / (i + 1.0)).sqrt()
+                k = s * (ks + kt)
+                ω = (k[..., None, None] * self.seplus12.soplus12.lie_algebra_basis).sum(
+                    -3
                 )
+
+                t = x_2[..., None] - self.seplus12.soplus12.exp(ω) @ x_1[..., None]
+                c = torch.zeros_like(x_diff)
+                v = (t - 1.0 / 2.0 * ω @ t + 1.0 / 12.0 * ω @ ω @ t)[..., 0]
             case float() | int():
                 φ = torch.tensor([generator])
-                kperp = (n_1 + n_2) / (n_1 + n_2).norm(
-                    dim=-1, keepdim=True
+                kφ = torch.cosh(φ) * ks - torch.sinh(φ) * kt
+
+                n_1p = n_1 + (kφ @ self.η * n_1).sum(-1, keepdim=True) * kφ
+                n_2p = n_2 + (kφ @ self.η * n_2).sum(-1, keepdim=True) * kφ
+                s = torch.atanh(
+                    (kφ @ self.η * hyperbolic_cross_product(n_1p, n_2p)).sum(
+                        -1, keepdim=True
+                    )
+                    / -(n_1p @ self.η * n_2p).sum(-1, keepdim=True)
+                )
+                k = s * kφ
+
+                x_perp = -1.0 * (kφ @ self.η * x_diff).sum(-1, keepdim=True) * kφ
+                x_par = x_diff - x_perp
+
+                c = (
+                    x_m - 0.5 * _cotanh(s / 2.0) * hyperbolic_cross_product(kφ, x_par)
                 ).nan_to_num()
-                norm = (kperp @ self.η * kperp).sum(-1, keepdim=True).sqrt()
-                k = torch.cosh(φ) * k0 - torch.sinh(φ) * kperp / norm
+                v = x_perp
             case _:
                 raise ValueError(f"{generator} is not a supported type of generator!")
 
-        n_1p = n_1 + (k @ self.η * n_1).sum(-1, keepdim=True) * k
-        n_2p = n_2 + (k @ self.η * n_2).sum(-1, keepdim=True) * k
+        ω = (k[..., None, None] * self.seplus12.soplus12.lie_algebra_basis).sum(-3)
 
-        s = torch.atanh(
-            (k @ self.η * hyperbolic_cross_product(n_1p, n_2p)).sum(-1, keepdim=True)
-            / -(n_1p @ self.η * n_2p).sum(-1, keepdim=True)
-        )
-        print(
-            (
-                (k @ self.η * hyperbolic_cross_product(n_1p, n_2p)).sum(
-                    -1, keepdim=True
-                )
-                / -(n_1p @ self.η * n_2p).sum(-1, keepdim=True)
-            ).max(),
-            (
-                (k @ self.η * hyperbolic_cross_product(n_1p, n_2p)).sum(
-                    -1, keepdim=True
-                )
-                / -(n_1p @ self.η * n_2p).sum(-1, keepdim=True)
-            ).min(),
-        )
-        print(
-            (n_1p @ self.η * n_2p).sum(-1, keepdim=True).max(),
-            (n_1p @ self.η * n_2p).sum(-1, keepdim=True).min(),
-        )
-        print(
-            (k @ self.η * hyperbolic_cross_product(n_1p, n_2p))
-            .sum(-1, keepdim=True)
-            .max(),
-            (k @ self.η * hyperbolic_cross_product(n_1p, n_2p))
-            .sum(-1, keepdim=True)
-            .min(),
-        )
-        print(torch.isnan(s).any())
-
-        x_perp = -1.0 * (k @ self.η * x_diff).sum(-1, keepdim=True) * k
-        x_par = x_diff - x_perp
-
-        c = (
-            x_m - 0.5 * _cotanh(s / 2.0) * hyperbolic_cross_product(k, x_par)
-        ).nan_to_num()
-        v = x_perp
-
-        ω_vec = s * k
-        ω = (ω_vec[..., None, None] * self.seplus12.soplus12.lie_algebra_basis).sum(-3)
+        A = torch.zeros(*shape, 4, 4, device=device)
 
         return self.seplus12.pack_translation_lorentz(
             A,
-            x_diff * parallel
-            + (
-                (-hyperbolic_cross_product(ω_vec, c) + v) * ~use_mav
-                + (-hyperbolic_cross_product(ω_vec_mav, c_mav) + v_mav) * use_mav
-            )
-            * ~parallel,
-            (ω * ~use_mav[..., None] + ω_mav * use_mav[..., None])
-            * ~parallel[..., None],
+            -hyperbolic_cross_product(k, c) + v,
+            ω,
         )
 
     def act(self, g, p):
