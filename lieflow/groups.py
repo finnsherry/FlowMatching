@@ -1163,7 +1163,7 @@ class M3(HomogeneousSpace):
 
 class P3(HomogeneousSpace):
     """
-    Position-Orientation space on 3D Lorentzian space.
+    Event-Velocity space on 3D flat spacetime.
 
     We choose P3 := {(x, n) in R^3 x R^3 | ||n|| = 1, nt >= 1}.
     """
@@ -1181,7 +1181,6 @@ class P3(HomogeneousSpace):
         self,
         p_1,
         p_2,
-        ε_stab=0.001,
         generator: Literal["timelike", "lightlike", "spacelike"] | float | None = None,
     ):
         """
