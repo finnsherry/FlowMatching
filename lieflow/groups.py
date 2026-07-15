@@ -706,7 +706,7 @@ class SE3(MatrixGroup):
 
     def _get_screw_displacement(self, g, ε_stab=0.001):
         t, R = self.get_translation_rotation(g)
-        ω = self.so3.log(R, ε_stab=ε_stab)
+        ω = self.so3.log(R)
         ω_vec = self.so3.lie_algebra_components(ω)
         θ = (ω_vec**2).sum(-1, keepdim=True).sqrt()
 
@@ -1081,8 +1081,6 @@ class M3(HomogeneousSpace):
 
         k0 = (cross_n / sinθ).nan_to_num()
         k0 = k0 * ~parallel + torch.zeros_like(k0) * parallel
-        x_m = (x_1 + x_2) / 2.0
-        x_diff = x_2 - x_1
         use_mav = x_diff.norm(dim=-1, keepdim=True) < ε_stab
         x_perp = (k0 * x_diff).sum(-1, keepdim=True) * k0
         x_par = x_diff - x_perp
@@ -1234,9 +1232,7 @@ class P3(HomogeneousSpace):
                 x_perp = (kt @ self.η * x_diff).sum(-1, keepdim=True) * kt
                 x_par = x_diff - x_perp
 
-                c = (
-                    x_m + 0.5 * _cotan(θ / 2.0) * hyperbolic_cross_product(kt, x_par)
-                ).nan_to_num()
+                c = x_m
                 v = x_perp
             case "lightlike":
                 s = 2 * ((i - 1.0) / (i + 1.0)).sqrt()
