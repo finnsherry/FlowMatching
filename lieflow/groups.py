@@ -1201,8 +1201,8 @@ class P3(HomogeneousSpace):
             generator = self.generator
         shape = torch.broadcast_shapes(p_1.shape, p_2.shape)[:-2]
         device = p_2.device
-        x_1, n_1 = self.get_position_orientation(p_1)
-        x_2, n_2 = self.get_position_orientation(p_2)
+        x_1, n_1 = self.get_event_velocity(p_1)
+        x_2, n_2 = self.get_event_velocity(p_2)
         x_m = (x_1 + x_2) / 2.0
         x_diff = x_2 - x_1
 
@@ -1281,12 +1281,12 @@ class P3(HomogeneousSpace):
     def act(self, g, p):
         return g @ p
 
-    def get_position_orientation(self, p):
+    def get_event_velocity(self, p):
         x = p[..., :3, -2]
         n = p[..., :3, -1]
         return x, n
 
-    def pack_position_orientation(self, x, n):
+    def pack_event_velocity(self, x, n):
         p = torch.zeros(*n.shape[:-1], 4, 2, device=n.device)
         p[..., :3, -2] = x
         p[..., 3, -2] = 1
