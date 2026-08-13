@@ -146,18 +146,22 @@ class FlowFieldGroup(nn.Module):
     ) -> torch.Tensor:
         return self.step(g_t, t, -Δt)
 
-    def train_network(self, device, train_loader, optimizer, loss):
+    def train_network(self, device, train_loader, optimizer, loss, show_progress=True):
         self.train()
         N_batches = len(train_loader)
         losses = np.zeros(N_batches)
-        for i, (g_0, g_1) in tqdm(
-            enumerate(train_loader),
-            total=N_batches,
-            desc="Training",
-            dynamic_ncols=True,
-            unit="batch",
-            leave=False,
-        ):
+        if show_progress:
+            loop = tqdm(
+                enumerate(train_loader),
+                total=N_batches,
+                desc="Training",
+                dynamic_ncols=True,
+                unit="batch",
+                leave=False,
+            )
+        else:
+            loop = enumerate(train_loader)
+        for i, (g_0, g_1) in loop:
             t = torch.rand(len(g_1), 1, device=device)
             g_0, g_1 = g_0.to(device), g_1.to(device)
             A_t = self.G.log(self.G.L_inv(g_0, g_1))
@@ -227,18 +231,24 @@ class ShortCutFieldGroup(nn.Module):
     ) -> torch.Tensor:
         return self.step(g_t, t, -Δt)
 
-    def train_network(self, device, train_loader, optimizer, loss, k=1 / 4):
+    def train_network(
+        self, device, train_loader, optimizer, loss, k=1 / 4, show_progress=True
+    ):
         self.train()
         N_batches = len(train_loader)
         losses = np.zeros(N_batches)
-        for i, (g_0, g_1) in tqdm(
-            enumerate(train_loader),
-            total=N_batches,
-            desc="Training",
-            dynamic_ncols=True,
-            unit="batch",
-            leave=False,
-        ):
+        if show_progress:
+            loop = tqdm(
+                enumerate(train_loader),
+                total=N_batches,
+                desc="Training",
+                dynamic_ncols=True,
+                unit="batch",
+                leave=False,
+            )
+        else:
+            loop = enumerate(train_loader)
+        for i, (g_0, g_1) in loop:
             N_total = len(g_1)  # Total number of samples in batch.
             t = torch.rand(len(g_1), 1, device=device)
             g_0, g_1 = g_0.to(device), g_1.to(device)
@@ -338,18 +348,22 @@ class FlowFieldMatrixGroup(nn.Module):
     ) -> torch.Tensor:
         return self.step(R_t, t, -Δt)
 
-    def train_network(self, device, train_loader, optimizer, loss):
+    def train_network(self, device, train_loader, optimizer, loss, show_progress=True):
         self.train()
         N_batches = len(train_loader)
         losses = np.zeros(N_batches)
-        for i, (R_0, R_1) in tqdm(
-            enumerate(train_loader),
-            total=N_batches,
-            desc="Training",
-            dynamic_ncols=True,
-            unit="batch",
-            leave=False,
-        ):
+        if show_progress:
+            loop = tqdm(
+                enumerate(train_loader),
+                total=N_batches,
+                desc="Training",
+                dynamic_ncols=True,
+                unit="batch",
+                leave=False,
+            )
+        else:
+            loop = enumerate(train_loader)
+        for i, (R_0, R_1) in loop:
             t = torch.rand(len(R_1), 1, 1, device=device)
             R_0, R_1 = R_0.to(device), R_1.to(device)
             A_t = self.G.log(self.G.L_inv(R_0, R_1))
@@ -437,19 +451,25 @@ class ShortCutFieldMatrixGroup(nn.Module):
     ) -> torch.Tensor:
         return self.step(R_t, t, -Δt)
 
-    def train_network(self, device, train_loader, optimizer, loss, k=1 / 4):
+    def train_network(
+        self, device, train_loader, optimizer, loss, k=1 / 4, show_progress=True
+    ):
         self.train()
         N_batches = len(train_loader)
         losses = np.zeros(N_batches)
         basis = self.G.lie_algebra_basis
-        for i, (R_0, R_1) in tqdm(
-            enumerate(train_loader),
-            total=N_batches,
-            desc="Training",
-            dynamic_ncols=True,
-            unit="batch",
-            leave=False,
-        ):
+        if show_progress:
+            loop = tqdm(
+                enumerate(train_loader),
+                total=N_batches,
+                desc="Training",
+                dynamic_ncols=True,
+                unit="batch",
+                leave=False,
+            )
+        else:
+            loop = enumerate(train_loader)
+        for i, (R_0, R_1) in loop:
             N_total = len(R_1)  # Total number of samples in batch.
             t = torch.rand(len(R_1), 1, 1, device=device)
             R_0, R_1 = R_0.to(device), R_1.to(device)
@@ -545,18 +565,22 @@ class FlowFieldHomogeneousSpace(nn.Module):
     ) -> torch.Tensor:
         return self.step(p_t, t, -Δt)
 
-    def train_network(self, device, train_loader, optimizer, loss):
+    def train_network(self, device, train_loader, optimizer, loss, show_progress=True):
         self.train()
         N_batches = len(train_loader)
         losses = np.zeros(N_batches)
-        for i, (p_0, p_1) in tqdm(
-            enumerate(train_loader),
-            total=N_batches,
-            desc="Training",
-            dynamic_ncols=True,
-            unit="batch",
-            leave=False,
-        ):
+        if show_progress:
+            loop = tqdm(
+                enumerate(train_loader),
+                total=N_batches,
+                desc="Training",
+                dynamic_ncols=True,
+                unit="batch",
+                leave=False,
+            )
+        else:
+            loop = enumerate(train_loader)
+        for i, (p_0, p_1) in loop:
             t = torch.rand(len(p_1), 1, 1, device=device)
             p_0, p_1 = p_0.to(device), p_1.to(device)
             A_t = self.h.get_generator(p_0, p_1)
@@ -628,18 +652,22 @@ class FlowFieldPowerGroup(nn.Module):
     ) -> torch.Tensor:
         return self.step(g_t, t, -Δt)
 
-    def train_network(self, device, train_loader, optimizer, loss):
+    def train_network(self, device, train_loader, optimizer, loss, show_progress=True):
         self.train()
         N_batches = len(train_loader)
         losses = np.zeros(N_batches)
-        for i, (g_0, g_1) in tqdm(
-            enumerate(train_loader),
-            total=N_batches,
-            desc="Training",
-            dynamic_ncols=True,
-            unit="batch",
-            leave=False,
-        ):
+        if show_progress:
+            loop = tqdm(
+                enumerate(train_loader),
+                total=N_batches,
+                desc="Training",
+                dynamic_ncols=True,
+                unit="batch",
+                leave=False,
+            )
+        else:
+            loop = enumerate(train_loader)
+        for i, (g_0, g_1) in loop:
             t = torch.rand(len(g_1), 1, 1, device=device).expand(*g_1.shape[:-1], 1)
             g_0, g_1 = g_0.to(device), g_1.to(device)
             A_t = self.G.log(self.G.L_inv(g_0, g_1))
