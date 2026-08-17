@@ -30,6 +30,7 @@ Also provides example implementations of
 
 from abc import ABC, abstractmethod
 from typing import Literal
+
 import torch
 
 
@@ -570,11 +571,11 @@ class SO3(MatrixGroup):
     Special orthogonal group of rotations on R^3.
     """
 
-    def __init__(self):
+    def __init__(self, device: str | torch.DeviceObjType = "cpu"):
         super().__init__(
             dim=3,
             mat_dim=3 * 3,
-            lie_algebra_basis=torch.Tensor(
+            lie_algebra_basis=torch.tensor(
                 [
                     [
                         [0.0, 0.0, 0.0],
@@ -591,7 +592,7 @@ class SO3(MatrixGroup):
                         [1.0, 0.0, 0.0],
                         [0.0, 0.0, 0.0],
                     ],
-                ]
+                ], device=device
             ),
         )
 
@@ -614,7 +615,7 @@ class SO3(MatrixGroup):
         A_norm = A / θ
 
         return (
-            torch.eye(3) + torch.sin(θ) * A_norm + (1 - torch.cos(θ)) * A_norm @ A_norm
+            torch.eye(3, device=A.device) + torch.sin(θ) * A_norm + (1 - torch.cos(θ)) * A_norm @ A_norm
         )
 
     def lie_algebra_components(self, A):
@@ -635,11 +636,11 @@ class SE3(MatrixGroup):
     Special euclidean group of roto-translations on R^3.
     """
 
-    def __init__(self):
+    def __init__(self, device: str | torch.DeviceObjType = "cpu"):
         super().__init__(
             dim=6,
             mat_dim=4 * 4,
-            lie_algebra_basis=torch.Tensor(
+            lie_algebra_basis=torch.tensor(
                 [
                     [
                         [0.0, 0.0, 0.0, 1.0],
@@ -677,10 +678,10 @@ class SE3(MatrixGroup):
                         [0.0, 0.0, 0.0, 0.0],
                         [0.0, 0.0, 0.0, 0.0],
                     ],
-                ]
+                ], device=device
             ),
         )
-        self.so3 = SO3()
+        self.so3 = SO3(device=device)
 
     def log(self, g, ε_stab=0.001):
         """
@@ -757,11 +758,11 @@ class SOplus12(MatrixGroup):
     Orthochronous Lorentz group on R^{1, 2}.
     """
 
-    def __init__(self):
+    def __init__(self, device: str | torch.DeviceObjType = "cpu"):
         super().__init__(
             dim=3,
             mat_dim=3 * 3,
-            lie_algebra_basis=torch.Tensor(
+            lie_algebra_basis=torch.tensor(
                 [
                     [
                         [0.0, 0.0, 0.0],
@@ -778,7 +779,7 @@ class SOplus12(MatrixGroup):
                         [-1.0, 0.0, 0.0],
                         [0.0, 0.0, 0.0],
                     ],
-                ]
+                ], device=device
             ),
         )
         self.η = torch.tensor(
@@ -786,7 +787,7 @@ class SOplus12(MatrixGroup):
                 [1.0, 0.0, 0.0],
                 [0.0, -1.0, 0.0],
                 [0.0, 0.0, -1.0],
-            ]
+            ], device=device
         )
 
     def log(self, Λ, ε_stab=0.0001):
@@ -861,11 +862,11 @@ class SEplus12(MatrixGroup):
     Orthochronous Poincaré group on R^{1,2}.
     """
 
-    def __init__(self):
+    def __init__(self, device: str | torch.DeviceObjType = "cpu"):
         super().__init__(
             dim=6,
             mat_dim=4 * 4,
-            lie_algebra_basis=torch.Tensor(
+            lie_algebra_basis=torch.tensor(
                 [
                     [
                         [0.0, 0.0, 0.0, 1.0],
@@ -903,10 +904,10 @@ class SEplus12(MatrixGroup):
                         [0.0, 0.0, 0.0, 0.0],
                         [0.0, 0.0, 0.0, 0.0],
                     ],
-                ]
+                ], device=device
             ),
         )
-        self.soplus12 = SOplus12()
+        self.soplus12 = SOplus12(device=device)
         self.η = self.soplus12.η
 
     def log(self, g, ε_stab=0.001):
@@ -1041,8 +1042,8 @@ class M3(HomogeneousSpace):
     Position-Orientation space on 3D Euclidean space.
     """
 
-    def __init__(self, generator: Literal["mav", "pure_rotation"] | float = "mav"):
-        self.se3 = SE3()
+    def __init__(self, generator: Literal["mav", "pure_rotation"] | float = "mav", device: str | torch.DeviceObjType = "cpu"):
+        self.se3 = SE3(device=device)
         super().__init__(G=self.se3, mat_dim=4 * 2)
         self.generator = generator
 
@@ -1104,7 +1105,7 @@ class M3(HomogeneousSpace):
                 k = cross_product(x_diff, n_2 - n_1)
                 k = (k / k.norm(dim=-1, keepdim=True)).nan_to_num()
             case float() | int():
-                φ = torch.tensor([generator])
+                φ = torch.tensor([generator], device=device)
                 khalfπ = (n_1 + n_2) / (n_1 + n_2).norm(
                     dim=-1, keepdim=True
                 ).nan_to_num()
@@ -1169,8 +1170,9 @@ class P3(HomogeneousSpace):
     def __init__(
         self,
         generator: Literal["timelike", "lightlike", "spacelike"] | float = "spacelike",
+        device: str | torch.DeviceObjType = "cpu",
     ):
-        self.seplus12 = SEplus12()
+        self.seplus12 = SEplus12(device=device)
         self.η = self.seplus12.η
         super().__init__(G=self.seplus12, mat_dim=4 * 2)
         self.generator = generator
@@ -1226,7 +1228,7 @@ class P3(HomogeneousSpace):
                 ).nan_to_num()
                 v = x_perp
             case "timelike":
-                θ = torch.tensor([torch.pi])
+                θ = torch.tensor([torch.pi], device=device)
                 k = θ * kt
 
                 x_perp = (kt @ self.η * x_diff).sum(-1, keepdim=True) * kt
@@ -1245,7 +1247,7 @@ class P3(HomogeneousSpace):
                 c = torch.zeros_like(x_diff)
                 v = (t - 1.0 / 2.0 * ω @ t + 1.0 / 12.0 * ω @ ω @ t)[..., 0]
             case float() | int():
-                φ = torch.tensor([generator])
+                φ = torch.tensor([generator], device=device)
                 kφ = torch.cosh(φ) * ks - torch.sinh(φ) * kt
 
                 n_1p = n_1 + (kφ @ self.η * n_1).sum(-1, keepdim=True) * kφ

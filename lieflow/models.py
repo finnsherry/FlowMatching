@@ -26,12 +26,14 @@ References:
   DOI:10.1007/978-3-032-03918-7_4.
 """
 
-import torch
-import torch.nn as nn
-import numpy as np
 from functools import partial
+
+import numpy as np
+import torch
+from torch import nn
 from tqdm.auto import tqdm
-from lieflow.groups import Group, MatrixGroup, HomogeneousSpace
+
+from lieflow.groups import Group, HomogeneousSpace, MatrixGroup
 
 
 def get_model_FM(
