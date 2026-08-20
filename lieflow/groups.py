@@ -24,8 +24,12 @@ Also provides example implementations of
   4. `SO3()` <: `MatrixGroup`: special orthogonal group of rotations on R^3.
   5. `SE3()` <: `MatrixGroup`: special Euclidean group of roto-translations on
   R^3.
-  6. `M3()` <: `HomogeneousSpace`: position-orientation space R^3 x S^2, which
+  6. `SOplus12()` <: `MatrixGroup`: proper orthochronous special orthogonal group of Lorentz transformations on R^3.
+  7. `SEplus12()` <: `MatrixGroup`: proper orthochronous special Euclidean group of Poincare transformations on R^3.
+  8. `M3()` <: `HomogeneousSpace`: position-orientation space R^3 x S^2, which
   is an SE(3)-homogeneous space.
+  9. `P3()` <: `HomogeneousSpace`: event-velocity space R^3 x H^2, which
+  is an SE^+(1, 2)-homogeneous space.
 """
 
 from abc import ABC, abstractmethod

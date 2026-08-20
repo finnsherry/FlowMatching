@@ -1,0 +1,9 @@
+{
+    "text.usetex": true,
+    "font.family": "serif",
+    "font.serif": ["Computer Modern"],
+    "font.size": 10.0,
+    "text.latex.preamble": "\\usepackage{lmodern} \\usepackage{amssymb} \\usepackage{amsmath}",
+    "figure.constrained_layout.use": true,
+    "latex_line_width": 4.804
+}
