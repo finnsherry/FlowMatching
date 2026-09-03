@@ -64,7 +64,7 @@ If you use this code in your own work, please cite our paper:
   title =        {{Diffusion-Shock Filtering on the Space of Positions and Orientations}},
   booktitle =    {7th International Conference on Geometric Science of Information},
   year =         {2025},
-  url =          {https://doi.org/10.1007/978-3-032-03918-7_6},
+  doi =          {10.1007/978-3-032-03918-7_6},
 }
 ```
 
