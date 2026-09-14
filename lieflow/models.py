@@ -75,7 +75,7 @@ def get_model_FM(
     elif isinstance(G, HomogeneousSpace):
         return FlowFieldHomogeneousSpace(G, H=H, L=L)
     else:
-        raise ValueError(
+        raise TypeError(
             f"{G} is neither a `Group`, a `MatrixGroup`, nor a  `HomogeneousSpace`!"
         )
 
@@ -95,7 +95,7 @@ def get_model_SCFM(G: Group | MatrixGroup, H: int = 64, L: int = 2):
     elif isinstance(G, MatrixGroup):
         return ShortCutFieldMatrixGroup(G, H=H, L=L)
     else:
-        raise ValueError(f"{G} is neither a `Group` nor a `MatrixGroup`!")
+        raise TypeError(f"{G} is neither a `Group` nor a `MatrixGroup`!")
 
 
 class FlowFieldGroup(nn.Module):
