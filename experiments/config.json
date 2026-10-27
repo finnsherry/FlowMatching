@@ -63,7 +63,10 @@
     },
     "SO3": {
         "epsilon": 0.01,
-        "batches_per_epoch": 40,
+        "batches_per_epoch": 160,
+        "learning_rate": 0.03,
+        "learning_rate_final": 0.0003,
+        "activation": "GELU",
         "loss_weights": [
             1.0,
             1.0,
@@ -76,9 +79,10 @@
     },
     "M3": {
         "batches_per_epoch": 800,
-        "learning_rate": 0.001,
-        "learning_rate_final": 1e-05,
+        "learning_rate": 0.01,
+        "learning_rate_final": 0.0001,
         "ema_decay": 0.999,
+        "activation": "ReLU",
         "loss_weights": [
             1.0,
             1.0,
