@@ -15,6 +15,8 @@ To reproduce the experiments, one additionally needs:
 * `jupyter`
 * `matplotlib`
 
+To compute the Wasserstein distance in the `metrics` submodule, one additionally needs `scipy`.
+
 The figures were made using LaTeX. Hence, to run the notebooks one either needs to have a LaTeX installation, or to remove the `matplotlib` configuration code
 ```python
     plt.rcParams.update({
@@ -53,6 +55,9 @@ One must first define a group `g`, which is an instance of (a subclass of) eithe
 
 Finally, there is an experimental model architecture `FlowFieldPowerGroup`. This is made for data that live in a direct power of some `group.Group`.
 Since `FlowFieldPowerGroup` uses a transformer architecture, it is possible to apply the same network to data in various powers of the same group.
+
+### `metrics`
+Here, sample-based metrics are defined to quantify how well a trained model works. Given samples generated with the `sample` method of a model, which integrates the flow from samples at $t = 0$ to $t = 1$, `evaluate` compares the generated samples with samples from the target distribution, in terms of the logarithmic distance $d(g, h) = \lVert \log(g^{-1} h) \rVert$. It computes the Wasserstein-1 distance, precision (mean distance from a generated sample to the nearest target sample), coverage (mean distance from a target sample to the nearest generated sample), and squared maximum mean discrepancy. Since finitely many samples of the same distribution are not at zero distance, these metrics should be compared with the metrics between two independent sets of target samples. See `experiments/flow_matching_SO3.ipynb` for an example.
 
 ## Cite
 If you use this code in your own work, please cite our paper:

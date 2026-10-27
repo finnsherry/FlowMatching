@@ -636,14 +636,19 @@ class SO3(MatrixGroup):
         return (a[..., None, None] * self.lie_algebra_basis).sum(-3)
 
     def exp(self, A, ε_stab=0.001):
-        """Rodrigues formula"""
+        """
+        Rodrigues formula: `exp(A) = I + sin(θ) / θ A + (1 - cos(θ)) / θ^2 A^2`,
+        with `θ` the norm of the components of `A`. Writing the coefficients as
+        `sinc(θ)` and `sinc(θ / 2)^2 / 2` makes this well-defined and accurate
+        for `θ -> 0`.
+        """
         A_vec = self.lie_algebra_components(A)
-        θ = (A_vec**2).sum(-1).sqrt()[..., None, None]
-        # A_norm = torch.where(θ < ε_stab, A, A / θ)
-        A_norm = A / θ
+        θ = (A_vec**2).sum(-1).clamp_min(1e-12).sqrt()[..., None, None]
 
         return (
-            torch.eye(3, device=A.device) + torch.sin(θ) * A_norm + (1 - torch.cos(θ)) * A_norm @ A_norm
+            torch.eye(3, device=A.device, dtype=A.dtype)
+            + _sinc(θ) * A
+            + _sinc(θ / 2) ** 2 / 2 * A @ A
         )
 
     def lie_algebra_components(self, A):

@@ -162,6 +162,20 @@ class FlowFieldGroup(nn.Module):
     ) -> torch.Tensor:
         return self.step(g_t, t, -Δt)
 
+    @torch.no_grad()
+    def sample(self, g_0: torch.Tensor, N_steps: int = 120) -> torch.Tensor:
+        """
+        Integrate the flow from samples `g_0` at t = 0 to t = 1 in `N_steps`
+        steps.
+        """
+        self.eval()
+        Δt = torch.tensor([1.0 / N_steps], device=g_0.device, dtype=g_0.dtype)
+        g_t = g_0
+        for i in range(N_steps):
+            t = torch.tensor([i / N_steps], device=g_0.device, dtype=g_0.dtype)
+            g_t = self.step(g_t, t, Δt)
+        return g_t
+
     def train_network(self, device, train_loader, optimizer, loss, show_progress=True):
         self.train()
         N_batches = len(train_loader)
@@ -245,6 +259,20 @@ class ShortCutFieldGroup(nn.Module):
         self, g_t: torch.Tensor, t: torch.Tensor, Δt: torch.Tensor
     ) -> torch.Tensor:
         return self.step(g_t, t, -Δt)
+
+    @torch.no_grad()
+    def sample(self, g_0: torch.Tensor, N_steps: int = 120) -> torch.Tensor:
+        """
+        Integrate the flow from samples `g_0` at t = 0 to t = 1 in `N_steps`
+        steps.
+        """
+        self.eval()
+        Δt = torch.tensor([1.0 / N_steps], device=g_0.device, dtype=g_0.dtype)
+        g_t = g_0
+        for i in range(N_steps):
+            t = torch.tensor([i / N_steps], device=g_0.device, dtype=g_0.dtype)
+            g_t = self.step(g_t, t, Δt)
+        return g_t
 
     def train_network(
         self, device, train_loader, optimizer, loss, k=1 / 4, show_progress=True
@@ -362,6 +390,20 @@ class FlowFieldMatrixGroup(nn.Module):
     ) -> torch.Tensor:
         return self.step(R_t, t, -Δt)
 
+    @torch.no_grad()
+    def sample(self, R_0: torch.Tensor, N_steps: int = 120) -> torch.Tensor:
+        """
+        Integrate the flow from samples `R_0` at t = 0 to t = 1 in `N_steps`
+        steps.
+        """
+        self.eval()
+        Δt = torch.tensor([1.0 / N_steps], device=R_0.device, dtype=R_0.dtype)
+        R_t = R_0
+        for i in range(N_steps):
+            t = torch.tensor([i / N_steps], device=R_0.device, dtype=R_0.dtype)
+            R_t = self.step(R_t, t, Δt)
+        return R_t
+
     def train_network(self, device, train_loader, optimizer, loss, show_progress=True):
         self.train()
         N_batches = len(train_loader)
@@ -463,6 +505,20 @@ class ShortCutFieldMatrixGroup(nn.Module):
         self, R_t: torch.Tensor, t: torch.Tensor, Δt: torch.Tensor
     ) -> torch.Tensor:
         return self.step(R_t, t, -Δt)
+
+    @torch.no_grad()
+    def sample(self, R_0: torch.Tensor, N_steps: int = 120) -> torch.Tensor:
+        """
+        Integrate the flow from samples `R_0` at t = 0 to t = 1 in `N_steps`
+        steps.
+        """
+        self.eval()
+        Δt = torch.tensor([1.0 / N_steps], device=R_0.device, dtype=R_0.dtype)
+        R_t = R_0
+        for i in range(N_steps):
+            t = torch.tensor([i / N_steps], device=R_0.device, dtype=R_0.dtype)
+            R_t = self.step(R_t, t, Δt)
+        return R_t
 
     def train_network(
         self, device, train_loader, optimizer, loss, k=1 / 4, show_progress=True
@@ -577,6 +633,20 @@ class FlowFieldHomogeneousSpace(nn.Module):
     ) -> torch.Tensor:
         return self.step(p_t, t, -Δt)
 
+    @torch.no_grad()
+    def sample(self, p_0: torch.Tensor, N_steps: int = 120) -> torch.Tensor:
+        """
+        Integrate the flow from samples `p_0` at t = 0 to t = 1 in `N_steps`
+        steps.
+        """
+        self.eval()
+        Δt = torch.tensor([1.0 / N_steps], device=p_0.device, dtype=p_0.dtype)
+        p_t = p_0
+        for i in range(N_steps):
+            t = torch.tensor([i / N_steps], device=p_0.device, dtype=p_0.dtype)
+            p_t = self.step(p_t, t, Δt)
+        return p_t
+
     def train_network(self, device, train_loader, optimizer, loss, show_progress=True):
         self.train()
         N_batches = len(train_loader)
@@ -669,6 +739,20 @@ class FlowFieldPowerGroup(nn.Module):
         self, g_t: torch.Tensor, t: torch.Tensor, Δt: torch.Tensor
     ) -> torch.Tensor:
         return self.step(g_t, t, -Δt)
+
+    @torch.no_grad()
+    def sample(self, g_0: torch.Tensor, N_steps: int = 120) -> torch.Tensor:
+        """
+        Integrate the flow from samples `g_0` at t = 0 to t = 1 in `N_steps`
+        steps.
+        """
+        self.eval()
+        Δt = torch.tensor([1.0 / N_steps], device=g_0.device, dtype=g_0.dtype)
+        g_t = g_0
+        for i in range(N_steps):
+            t = torch.tensor([i / N_steps], device=g_0.device, dtype=g_0.dtype)
+            g_t = self.step(g_t, t, Δt)
+        return g_t
 
     def train_network(self, device, train_loader, optimizer, loss, show_progress=True):
         self.train()

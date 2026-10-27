@@ -8,10 +8,12 @@
     We also generalise shortcut modeling, which can be seen as learning the
     integrator of the flow field from flow matching, and in this way can
     speed up inferencing.[3]
-    There are two submodules:
+    There are three submodules:
       1. `groups`: encapsulates basic Lie group and Lie algebra properties.
       2. `models`: implementations of Lie group flow matching and shortcut
       models.
+      3. `metrics`: sample-based metrics to quantify how well generated
+      samples match a target distribution.
 
     References:
       [1]:
@@ -25,3 +27,4 @@
 
 import lieflow.groups
 import lieflow.models
+import lieflow.metrics
