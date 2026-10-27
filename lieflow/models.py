@@ -32,6 +32,7 @@ import numpy as np
 import torch
 from torch import nn
 from tqdm.auto import tqdm
+from collections.abc import Callable
 
 from lieflow.groups import Group, HomogeneousSpace, MatrixGroup
 
@@ -44,6 +45,7 @@ def get_model_FM(
     embed_dim: int = 256,
     num_heads: int = 8,
     expansion: int = 4,
+    shared_weights: bool = True,
 ):
     """
     Return an instance of a flow matching model corresponding to the type of
@@ -62,25 +64,35 @@ def get_model_FM(
         `embed_dim`: dimension of the linear embedding of the tokens.
         `num_heads`: number of heads in the multihead attention.
         `expansion`: expansion factor in the pointwise feedforward network.
+        `shared_weights`: whether all hidden layers (or encoder blocks) share the same weights,
+          i.e. the network repeatedly applies the same layer. Defaults to
+          True.
     """
     if isinstance(G, Group):
         if power_group:
             return FlowFieldPowerGroup(
-                G, embed_dim=embed_dim, num_heads=num_heads, expansion=expansion, L=L
+                G,
+                embed_dim=embed_dim,
+                num_heads=num_heads,
+                expansion=expansion,
+                L=L,
+                shared_weights=shared_weights,
             )
         else:
-            return FlowFieldGroup(G, H=H, L=L)
+            return FlowFieldGroup(G, H=H, L=L, shared_weights=shared_weights)
     elif isinstance(G, MatrixGroup):
-        return FlowFieldMatrixGroup(G, H=H, L=L)
+        return FlowFieldMatrixGroup(G, H=H, L=L, shared_weights=shared_weights)
     elif isinstance(G, HomogeneousSpace):
-        return FlowFieldHomogeneousSpace(G, H=H, L=L)
+        return FlowFieldHomogeneousSpace(G, H=H, L=L, shared_weights=shared_weights)
     else:
         raise TypeError(
             f"{G} is neither a `Group`, a `MatrixGroup`, nor a  `HomogeneousSpace`!"
         )
 
 
-def get_model_SCFM(G: Group | MatrixGroup, H: int = 64, L: int = 2):
+def get_model_SCFM(
+    G: Group | MatrixGroup, H: int = 64, L: int = 2, shared_weights: bool = True
+):
     """
     Return an instance of a shortcut model corresponding to the type of `G`.
 
@@ -89,11 +101,14 @@ def get_model_SCFM(G: Group | MatrixGroup, H: int = 64, L: int = 2):
       Optional:
         `H`: width of the network: number of channels. Defaults to 64.
         `L`: depth of the network: number of layers - 2. Defaults to 2.
+        `shared_weights`: whether all hidden layers share the same weights,
+          i.e. the network repeatedly applies the same layer. Defaults to
+          True.
     """
     if isinstance(G, Group):
-        return ShortCutFieldGroup(G, H=H, L=L)
+        return ShortCutFieldGroup(G, H=H, L=L, shared_weights=shared_weights)
     elif isinstance(G, MatrixGroup):
-        return ShortCutFieldMatrixGroup(G, H=H, L=L)
+        return ShortCutFieldMatrixGroup(G, H=H, L=L, shared_weights=shared_weights)
     else:
         raise TypeError(f"{G} is neither a `Group` nor a `MatrixGroup`!")
 
@@ -108,6 +123,9 @@ class FlowFieldGroup(nn.Module):
       Optional:
         `H`: width of the network: number of channels. Defaults to 64.
         `L`: depth of the network: number of layers - 2. Defaults to 2.
+        `shared_weights`: whether all hidden layers share the same weights,
+          i.e. the network repeatedly applies the same layer. Defaults to
+          True.
 
     References:
         [1]: Y. Lipman, R.T.Q. Chen, H. Ben-Hami, M. Nickel, and M. Le.
@@ -118,19 +136,15 @@ class FlowFieldGroup(nn.Module):
           DOI:10.1007/978-3-032-03918-7_6.
     """
 
-    def __init__(self, G: Group, H: int = 64, L: int = 2):
+    def __init__(
+        self, G: Group, H: int = 64, L: int = 2, shared_weights: bool = True
+    ):
         super().__init__()
         self.G = G
         self.network = nn.Sequential(
             nn.Linear(G.dim + 1, H),
             nn.ReLU(),
-            *(
-                L
-                * (
-                    nn.Linear(H, H),
-                    nn.ReLU(),
-                )
-            ),
+            *_hidden_layers(lambda: [nn.Linear(H, H), nn.ReLU()], L, shared_weights),
             nn.Linear(H, G.dim),
         )
 
@@ -190,6 +204,9 @@ class ShortCutFieldGroup(nn.Module):
       Optional:
         `H`: width of the network: number of channels. Defaults to 64.
         `L`: depth of the network: number of layers - 2. Defaults to 2.
+        `shared_weights`: whether all hidden layers share the same weights,
+          i.e. the network repeatedly applies the same layer. Defaults to
+          True.
 
     References:
         [1]: K. Frans, D. Hafner, S. Levine, and P. Abbeel.
@@ -200,19 +217,15 @@ class ShortCutFieldGroup(nn.Module):
           DOI:10.1007/978-3-032-03918-7_6.
     """
 
-    def __init__(self, G: Group, H: int = 64, L: int = 2):
+    def __init__(
+        self, G: Group, H: int = 64, L: int = 2, shared_weights: bool = True
+    ):
         super().__init__()
         self.G = G
         self.network = nn.Sequential(
             nn.Linear(G.dim + 2, H),
             nn.ReLU(),
-            *(
-                L
-                * (
-                    nn.Linear(H, H),
-                    nn.ReLU(),
-                )
-            ),
+            *_hidden_layers(lambda: [nn.Linear(H, H), nn.ReLU()], L, shared_weights),
             nn.Linear(H, G.dim),
         )
 
@@ -256,7 +269,7 @@ class ShortCutFieldGroup(nn.Module):
             g_0, g_1 = g_0.to(device), g_1.to(device)
             g_t = self.G.L(g_0, self.G.exp(t * self.G.log(self.G.L_inv(g_0, g_1))))
 
-            Δt = torch.rand(N_total, 1, device=device) * (1 - t)  # t + Δt <= 1.
+            Δt = torch.rand(N_total, 1, device=device) * (1 - t) / 2  # t + 2Δt <= 1.
             A_t = torch.zeros_like(g_t)
             N_SG = int(k * N_total)  # Number of samples used for self-consistency loss.
 
@@ -267,10 +280,10 @@ class ShortCutFieldGroup(nn.Module):
 
             # Self-Consistency
             g_t_SG, t_SG, Δt_SG = g_t[:N_SG], t[:N_SG], Δt[:N_SG]
-            B_t = self(g_t_SG, t_SG, Δt_SG)
-            g_t_Δt = self.G.L(g_t_SG, self.G.exp(Δt_SG * B_t))
-            B_t_Δt = self(g_t_Δt, t_SG + Δt_SG, Δt_SG)
             with torch.no_grad():
+                B_t = self(g_t_SG, t_SG, Δt_SG)
+                g_t_Δt = self.G.L(g_t_SG, self.G.exp(Δt_SG * B_t))
+                B_t_Δt = self(g_t_Δt, t_SG + Δt_SG, Δt_SG)
                 A_t[:N_SG] = (B_t + B_t_Δt) / 2
 
             optimizer.zero_grad()
@@ -295,6 +308,9 @@ class FlowFieldMatrixGroup(nn.Module):
       Optional:
         `H`: width of the network: number of channels. Defaults to 64.
         `L`: depth of the network: number of layers - 2. Defaults to 2.
+        `shared_weights`: whether all hidden layers share the same weights,
+          i.e. the network repeatedly applies the same layer. Defaults to
+          True.
 
     References:
         [1]: Y. Lipman, R.T.Q. Chen, H. Ben-Hami, M. Nickel, and M. Le.
@@ -308,19 +324,15 @@ class FlowFieldMatrixGroup(nn.Module):
           DOI:10.1007/978-3-032-03918-7_6.
     """
 
-    def __init__(self, G: MatrixGroup, H: int = 64, L: int = 2):
+    def __init__(
+        self, G: MatrixGroup, H: int = 64, L: int = 2, shared_weights: bool = True
+    ):
         super().__init__()
         self.G = G
         self.network = nn.Sequential(
             nn.Linear(G.mat_dim + 1, H),
             nn.ReLU(),
-            *(
-                L
-                * (
-                    nn.Linear(H, H),
-                    nn.ReLU(),
-                )
-            ),
+            *_hidden_layers(lambda: [nn.Linear(H, H), nn.ReLU()], L, shared_weights),
             nn.Linear(H, G.dim),
         )
 
@@ -394,6 +406,9 @@ class ShortCutFieldMatrixGroup(nn.Module):
       Optional:
         `H`: width of the network: number of channels. Defaults to 64.
         `L`: depth of the network: number of layers - 2. Defaults to 2.
+        `shared_weights`: whether all hidden layers share the same weights,
+          i.e. the network repeatedly applies the same layer. Defaults to
+          True.
 
     References:
         [1]: Y. Lipman, R.T.Q. Chen, H. Ben-Hami, M. Nickel, and M. Le.
@@ -407,19 +422,15 @@ class ShortCutFieldMatrixGroup(nn.Module):
           DOI:10.1007/978-3-032-03918-7_6.
     """
 
-    def __init__(self, G: MatrixGroup, H: int = 64, L: int = 2):
+    def __init__(
+        self, G: MatrixGroup, H: int = 64, L: int = 2, shared_weights: bool = True
+    ):
         super().__init__()
         self.G = G
         self.network = nn.Sequential(
             nn.Linear(G.mat_dim + 2, H),
             nn.ReLU(),
-            *(
-                L
-                * (
-                    nn.Linear(H, H),
-                    nn.ReLU(),
-                )
-            ),
+            *_hidden_layers(lambda: [nn.Linear(H, H), nn.ReLU()], L, shared_weights),
             nn.Linear(H, G.dim),
         )
 
@@ -477,7 +488,7 @@ class ShortCutFieldMatrixGroup(nn.Module):
             R_0, R_1 = R_0.to(device), R_1.to(device)
             R_t = self.G.L(R_0, self.G.exp(t * self.G.log(self.G.L_inv(R_0, R_1))))
 
-            Δt = torch.rand(N_total, 1, 1, device=device) * (1 - t)  # t + Δt <= 1.
+            Δt = torch.rand(N_total, 1, 1, device=device) * (1 - t) / 2  # t + 2Δt <= 1.
             A_t = torch.zeros_like(R_t)
             N_SG = int(k * N_total)  # Number of samples used for self-consistency loss.
 
@@ -488,12 +499,12 @@ class ShortCutFieldMatrixGroup(nn.Module):
 
             # Self-Consistency
             R_t_SG, t_SG, Δt_SG = R_t[:N_SG], t[:N_SG], Δt[:N_SG]
-            b_t = self(R_t_SG, t_SG, Δt_SG)
-            B_t = (b_t[..., None, None] * basis).sum(-1)
-            R_t_Δt = self.G.L(R_t_SG, self.G.exp(Δt_SG * B_t))
-            b_t_Δt = self(R_t_Δt, t_SG + Δt_SG, Δt_SG)
-            B_t_Δt = (b_t_Δt[..., None, None] * basis).sum(-1)
             with torch.no_grad():
+                b_t = self(R_t_SG, t_SG, Δt_SG)
+                B_t = (b_t[..., None, None] * basis).sum(-3)
+                R_t_Δt = self.G.L(R_t_SG, self.G.exp(Δt_SG * B_t))
+                b_t_Δt = self(R_t_Δt, t_SG + Δt_SG, Δt_SG)
+                B_t_Δt = (b_t_Δt[..., None, None] * basis).sum(-3)
                 A_t[:N_SG] = (B_t + B_t_Δt) / 2
 
             # Components w.r.t. Lie algebra basis.
@@ -522,6 +533,9 @@ class FlowFieldHomogeneousSpace(nn.Module):
       Optional:
         `H`: width of the network: number of channels. Defaults to 64.
         `L`: depth of the network: number of layers - 2. Defaults to 2.
+        `shared_weights`: whether all hidden layers share the same weights,
+          i.e. the network repeatedly applies the same layer. Defaults to
+          True.
 
     References:
         [1]: Y. Lipman, R.T.Q. Chen, H. Ben-Hami, M. Nickel, and M. Le.
@@ -536,19 +550,15 @@ class FlowFieldHomogeneousSpace(nn.Module):
           DOI:10.1007/978-3-032-03918-7_4.
     """
 
-    def __init__(self, h: HomogeneousSpace, H: int = 64, L: int = 2):
+    def __init__(
+        self, h: HomogeneousSpace, H: int = 64, L: int = 2, shared_weights: bool = True
+    ):
         super().__init__()
         self.h = h
         self.network = nn.Sequential(
             nn.Linear(h.mat_dim + 1, H),
             nn.ReLU(),
-            *(
-                L
-                * (
-                    nn.Linear(H, H),
-                    nn.ReLU(),
-                )
-            ),
+            *_hidden_layers(lambda: [nn.Linear(H, H), nn.ReLU()], L, shared_weights),
             nn.Linear(H, h.G.dim),
         )
 
@@ -613,6 +623,9 @@ class FlowFieldPowerGroup(nn.Module):
         `num_heads`: number of heads in the multihead attention.
         `expansion`: expansion factor in the pointwise feedforward network.
         `L`: depth of the network: number of layers - 2. Defaults to 2.
+        `shared_weights`: whether all hidden layers share the same weights,
+          i.e. the network repeatedly applies the same layer. Defaults to
+          True.
 
     References:
         [1]: Y. Lipman, R.T.Q. Chen, H. Ben-Hami, M. Nickel, and M. Le.
@@ -630,13 +643,16 @@ class FlowFieldPowerGroup(nn.Module):
         num_heads: int = 8,
         expansion: int = 4,
         L: int = 2,
+        shared_weights: bool = True,
     ):
         super().__init__()
         self.G = G
 
         self.network = nn.Sequential(
             nn.Linear(G.dim + 1, embed_dim),
-            *(L * (EncoderBlock(embed_dim, num_heads, expansion),)),
+            *_hidden_layers(
+                lambda: [EncoderBlock(embed_dim, num_heads, expansion)], L, shared_weights
+            ),
             nn.Linear(embed_dim, G.dim),
         )
 
@@ -717,6 +733,19 @@ class EncoderBlock(nn.Module):
         return sum(p.numel() for p in self.parameters())
 
 
+def _hidden_layers(
+    layer_maker: Callable[[], list[nn.Module]],
+    L: int,
+    shared_weights: bool
+) -> list[nn.Module]:
+    """
+    Return `L` hidden layers. If `shared_weights`, each layer has the same weights.
+    """
+    if shared_weights:
+        return L * [*layer_maker()]
+    return [x for _ in range(L) for x in layer_maker()]
+
+
 class LogarithmicDistance(nn.Module):
     def __init__(self, w):
         super().__init__()
@@ -758,3 +787,19 @@ def ρ_c_normalised(
     A_1: torch.Tensor, A_2: torch.Tensor, w: torch.Tensor
 ) -> torch.Tensor:
     return (w**2 * (A_2 - A_1) ** 2).mean()
+
+
+class DataGenerator:
+    """Draws new pairs (g_0, g_1) for every batch."""
+    def __init__(self, generate_g_0, generate_g_1, batch_size, batches_per_epoch):
+        self.generate_g_0 = generate_g_0
+        self.generate_g_1 = generate_g_1
+        self.batch_size = batch_size
+        self.batches_per_epoch = batches_per_epoch
+
+    def __len__(self):
+        return self.batches_per_epoch
+
+    def __iter__(self):
+        for _ in range(self.batches_per_epoch):
+            yield self.generate_g_0(self.batch_size), self.generate_g_1(self.batch_size)

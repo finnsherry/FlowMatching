@@ -32,6 +32,7 @@ Also provides example implementations of
   is an SE^+(1, 2)-homogeneous space.
 """
 
+import math
 from abc import ABC, abstractmethod
 from typing import Literal
 
@@ -600,16 +601,39 @@ class SO3(MatrixGroup):
             ),
         )
 
-    def log(self, R):
+    def log(self, R, ε_π=0.1):
         """
         Lie group logarithm of `R`, i.e. `A` in Lie algebra such that
         `exp(A) = R`.
 
         Pytorch does not actually have a matrix log built in, but for SO(3) it
-        is not too complicated.
+        is not too complicated. Writing `R = exp(θ [n]_×)`, the skew-symmetric
+        part of `R` gives `sin(θ) n`, which vanishes as `θ -> π`. Hence, if `θ`
+        is within `ε_π` of `π`, we instead extract the axis `n` from the
+        symmetric part of `R`, which gives `n n^T`.
         """
-        q = _arccos((_trace(R) - 1) / 2)
-        return (R - R.transpose(-2, -1)) / (2 * _sinc(q[..., None, None]))
+        sin_n = self.lie_algebra_components(R - R.transpose(-2, -1)) / 2
+        cos = (_trace(R) - 1) / 2
+        θ = torch.atan2(sin_n.norm(dim=-1), cos)
+        near_π = θ > torch.pi - ε_π
+
+        # Away from π: A = θ / sin(θ) (R - R^T) / 2.
+        a_regular = sin_n / _sinc(torch.where(near_π, 0.0, θ))[..., None]
+
+        # Near π: n n^T = (sym(R) - cos(θ) I) / (1 - cos(θ)); every column is a
+        # multiple of n, the one with the largest diagonal entry is the most
+        # accurate. Its sign is fixed by sin(θ) n.
+        nnT = (
+            (R + R.transpose(-2, -1)) / 2 - cos[..., None, None] * torch.eye(3, device=R.device)
+        ) / (1 - cos).clamp_min(1.0)[..., None, None]
+        i = nnT.diagonal(dim1=-2, dim2=-1).argmax(-1)
+        n = torch.gather(nnT, -1, i[..., None, None].expand(*i.shape, 3, 1))[..., 0]
+        n = n / n.norm(dim=-1, keepdim=True).clamp_min(1e-12)
+        n = torch.where((n * sin_n).sum(-1, keepdim=True) < 0, -n, n)
+        a_near_π = θ[..., None] * n
+
+        a = torch.where(near_π[..., None], a_near_π, a_regular)
+        return (a[..., None, None] * self.lie_algebra_basis).sum(-3)
 
     def exp(self, A, ε_stab=0.001):
         """Rodrigues formula"""
@@ -794,59 +818,86 @@ class SOplus12(MatrixGroup):
             ], device=device
         )
 
-    def log(self, Λ, ε_stab=0.0001):
+    def log(self, Λ, ε_stab=0.001, ε_π=1.5):
         """
         Lie group logarithm of `Λ`, i.e. `A` in Lie algebra such that
         `exp(A) = Λ`.
 
         Pytorch does not actually have a matrix log built in, but for SO^+(1, 2) it
-        is not too complicated.
+        is not too complicated. Writing `Λ = exp(θ Â)` with `Â` a unit generator
+        and `c = (tr(Λ) - 1) / 2`, we have `(Λ - Λ^{-1}) / 2 = A / f(c)`, where
+        `f(c) = θ / sin(θ)` with `c = cos(θ)` if `A` is timelike, `θ / sinh(θ)`
+        with `c = cosh(θ)` if `A` is spacelike, and `1` if `A` is lightlike.
+        Since `f` is analytic around `c = 1`, we use its Taylor expansion if
+        `|1 - c| < ε_stab`, so that we need not classify `A`.
+
+        If `A` is timelike and `θ` is within `ε_π` of `π`, `f` is ill-conditioned
+        and blows up as `sin(θ)` vanishes. We then instead extract the axis `k` of `Â`, normalised such that
+        `k^T η k = 1`, from `(Λ + Λ^{-1}) / 2 = I + (1 - c) Â^2` using
+        `Â^2 + I = k k^T η`.
         """
-        A_tilde = Λ - self.η @ Λ.transpose(-2, -1) @ self.η
-        k_tilde = self.lie_algebra_components(A_tilde)
-        norm_squared = (k_tilde @ self.η * k_tilde).sum(-1)[..., None, None]
+        η = self.η.to(Λ.dtype)
+        Λ_inv = η @ Λ.transpose(-2, -1) @ η
+        k_tilde = self.lie_algebra_components(Λ - Λ_inv) / 2
+        c = (_trace(Λ) - 1) / 2
+        u = 1 - c
+        near_identity = u.abs() < ε_stab
+        timelike = c < 1
+        near_π = c < -math.cos(ε_π)
 
-        lightlike = norm_squared.abs() < ε_stab
-        timelike = (norm_squared > 0) * ~lightlike
-        spacelike = (norm_squared < 0) * ~lightlike
-
-        trace_Λ = _trace(Λ)[..., None, None]
-
-        s = (
-            1.0 * lightlike
-            + _arccosh((trace_Λ - 1) / 2) * spacelike
-            + _arccos((trace_Λ - 1) / 2) * timelike
+        # Away from π: A = f(c) (Λ - Λ^{-1}) / 2.
+        c_timelike = torch.where(timelike & ~near_identity & ~near_π, c, 0.0)
+        c_spacelike = torch.where(~timelike & ~near_identity, c, 2.0)
+        f = torch.where(
+            near_identity,
+            1 + u / 3 + 2 * u**2 / 15 + 2 * u**3 / 35,
+            torch.where(
+                timelike,
+                torch.arccos(c_timelike) / ((1 - c_timelike) * (1 + c_timelike)).sqrt(),
+                torch.arccosh(c_spacelike) / ((c_spacelike - 1) * (c_spacelike + 1)).sqrt(),
+            ),
         )
+        a_regular = f[..., None] * k_tilde
 
-        return (
-            A_tilde / 2.0 * lightlike
-            + A_tilde / (2.0 * _sinhc(s)) * spacelike
-            + A_tilde / (2.0 * _sinc(s)) * timelike
-        )
+        # Near π: the first column of k k^T η is k_0 k, with k_0^2 >= 1.
+        kkTη = (
+            (Λ + Λ_inv) / 2 - c[..., None, None] * torch.eye(3, device=Λ.device, dtype=Λ.dtype)
+        ) / u.clamp_min(ε_stab)[..., None, None]
+        k = kkTη[..., 0] / kkTη[..., 0, 0, None].clamp_min(1.0).sqrt()
+        # (Λ - Λ^{-1}) / 2 = sin(θ) Â, so this gives θ including its sign.
+        θ = torch.atan2((k_tilde @ η * k).sum(-1), c)
+        a_near_π = θ[..., None] * k
+
+        a = torch.where(near_π[..., None], a_near_π, a_regular)
+        return (a[..., None, None] * self.lie_algebra_basis.to(Λ.dtype)).sum(-3)
 
     def exp(self, A, ε_stab=0.0001):
-        """Generalised Rodrigues formula"""
+        """
+        Generalised Rodrigues formula: `exp(A) = I + F_1(s^2) A + F_2(s^2) A^2`,
+        where `s^2 = k^T η k` for components `k` of `A`, and `F_1(s^2) = sin(s) / s`
+        and `F_2(s^2) = (1 - cos(s)) / s^2` if `s^2 > 0`, and the hyperbolic
+        analogues if `s^2 < 0`. Since `F_1` and `F_2` are analytic in `s^2`, we
+        use their Taylor expansions if `|s^2| < ε_stab`.
+        """
         A_vec = self.lie_algebra_components(A)
-        s_squared = (A_vec @ self.η * A_vec).sum(-1)[..., None, None]
+        s_squared = (A_vec @ self.η.to(A.dtype) * A_vec).sum(-1)[..., None, None]
 
-        lightlike = s_squared.abs() < ε_stab
-        timelike = (s_squared > 0.0) * ~lightlike
-        spacelike = (s_squared < 0.0) * ~lightlike
+        small = s_squared.abs() < ε_stab
+        timelike = s_squared > 0.0
+        θ = torch.where(small, 1.0, s_squared.abs()).sqrt()
 
-        θ = s_squared.abs().sqrt()
-
-        A_norm = torch.where(lightlike, A, A / θ)
-
-        first_order = (
-            torch.sin(θ) * timelike + 1.0 * lightlike + torch.sinh(θ) * spacelike
+        F_1 = torch.where(
+            small,
+            1 - s_squared / 6 + s_squared**2 / 120 - s_squared**3 / 5040,
+            torch.where(timelike, _sinc(θ), _sinhc(θ)),
         )
-        second_order = (
-            (1.0 - torch.cos(θ)) * timelike
-            + 0.5 * lightlike
-            + (torch.cosh(θ) - 1.0) * spacelike
+        F_2 = torch.where(
+            small,
+            1 / 2 - s_squared / 24 + s_squared**2 / 720 - s_squared**3 / 40320,
+            torch.where(timelike, _sinc(θ / 2) ** 2, _sinhc(θ / 2) ** 2) / 2,
         )
 
-        return torch.eye(3) + first_order * A_norm + second_order * A_norm @ A_norm
+        return torch.eye(3, device=A.device, dtype=A.dtype) + F_1 * A + F_2 * A @ A
 
     def lie_algebra_components(self, A):
         """
