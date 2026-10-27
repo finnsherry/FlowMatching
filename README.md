@@ -9,13 +9,12 @@ The core functionality of this repository requires:
 * `python>=3.12`
 * `pytorch==2.6`
 * `numpy`
+* `scipy`
 * `tqdm`
 
 To reproduce the experiments, one additionally needs:
 * `jupyter`
 * `matplotlib`
-
-To compute the Wasserstein distance in the `metrics` submodule, one additionally needs `scipy`.
 
 The figures were made using LaTeX. Hence, to run the notebooks one either needs to have a LaTeX installation, or to remove the `matplotlib` configuration code
 ```python
@@ -49,9 +48,9 @@ Here the basic group operations are defined. There are two abstract types of gro
 Notably, the data are not wrapped in any custom object, but are assumed to be `torch.Tensor`s. For data in a `Group`, the last dimension must have length equal to the dimension of the group, while for data in a `MatrixGroup`, the last two dimensions must equal the size of the matrix representation of the group.
 
 ### `models`
-Here, the network architectures are defined. We have implementations for both FM on Lie groups and so-called shortcut models [[4]](#4) on Lie groups; we did not discuss the shortcut models in [[1]](#1) due to space constraints.
+Here, the network architectures are defined. We have implementations for FM on Lie groups.
 
-One must first define a group `g`, which is an instance of (a subclass of) either `groups.Group` or `groups.MatrixGroup`. The functions `get_model_FM` and `get_model_SCFM` will then return a new FM or shortcut model, respectively. If `g` is a `groups.Group`, then the model will be an instance of `FlowFieldGroup` or `ShortCutFieldGroup`, while if `g` is a `groups.MatrixGroup`, the model will be an instance of `FlowFieldMatrixGroup` or `ShortCutFieldMatrixGroup`. If the group operations are correctly implemented, it should not be necessary to manually adapt the network architecture.
+One must first define a group `g`, which is an instance of (a subclass of) either `groups.Group` or `groups.MatrixGroup`. The function `get_model_FM` will then return a new FM. If `g` is a `groups.Group`, then the model will be an instance of `FlowFieldGroup`, while if `g` is a `groups.MatrixGroup`, the model will be an instance of `FlowFieldMatrixGroup`. If the group operations are correctly implemented, it should not be necessary to manually adapt the network architecture.
 
 Finally, there is an experimental model architecture `FlowFieldPowerGroup`. This is made for data that live in a direct power of some `group.Group`.
 Since `FlowFieldPowerGroup` uses a transformer architecture, it is possible to apply the same network to data in various powers of the same group.
@@ -96,18 +95,5 @@ The goal of our work is similar to FM on Riemannian manifolds by Chen & Lipman:
   booktitle = {12th International Conference on Learning Representations},
   year = {2024},
   url = {https://openreview.net/forum?id=g7ohDlTITL}
-}
-```
-
-One limitation of FM models is that they require integrating the learned vector field at inference time, which typically requires many network evaluations. Frans et al. showed that the architecture can be adapted to learn instead how to integrate the vector field, which means that one can perform how quality inference with only a few network evaluations:
-
-<a id="4">[4]</a> Frans, K., Hafner, D., Levine, S., Abbeel, P. "One Step Diffusion via Shortcut Models." 13th International Conference on Learning Representations (ICLR) (2025). https://openreview.net/forum?id=OlzB6LnXcS
-```
-@article{Frans2025OneModels,
-  author = {Frans, Kevin and Hafner, Danijar and Levine, Sergey and Abbeel, Pieter},
-  title = {{One Step Diffusion via Shortcut Models}},
-  journal = {ICLR},
-  year = {2025},
-  url = {https://openreview.net/forum?id=OlzB6LnXcS}
 }
 ```
