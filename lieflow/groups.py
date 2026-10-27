@@ -81,6 +81,59 @@ class Group(ABC):
         """
         raise NotImplementedError
 
+    @torch.no_grad()
+    def distance_matrix(
+        self,
+        g_1: torch.Tensor,
+        g_2: torch.Tensor,
+        w: torch.Tensor | None = None,
+        chunk_size: int = 128,
+        permutation_invariant: bool = False,
+    ) -> torch.Tensor:
+        """
+        Compute the matrix of logarithmic distances `D[i, j] = ρ(g_1[i], g_2[j])`
+        with `ρ(g, h) = ||w * log(g^{-1} h)||`.
+
+        Args:
+            `g_1`: samples of shape [N, ..., dim].
+            `g_2`: samples of shape [M, ..., dim].
+          Optional:
+            `w`: metric parameters. Defaults to all ones.
+            `chunk_size`: number of rows of `D` computed at once, to limit memory
+            usage. Defaults to 128.
+            `permutation_invariant`: only for samples in a power of the group,
+            i.e. of shape [N, m, dim]. If True, the distance is minimised over
+            all permutations of the m factors, so that samples are treated as
+            unordered sets. Defaults to False.
+
+        For samples in a power of the group, the distance is the product
+        distance `ρ(g, h) = (sum_k ρ(g_k, h_k)^2)^(1/2)`.
+        """
+        if permutation_invariant:
+            return self._permutation_invariant_distance_matrix(g_1, g_2, w, chunk_size)
+        D = torch.empty(len(g_1), len(g_2), device=g_2.device)
+        for i in range(0, len(g_1), chunk_size):
+            A = self.log(self.L_inv(g_1[i:i + chunk_size, None], g_2[None]))
+            if w is not None:
+                A = w * A
+            D[i:i + chunk_size] = A.flatten(start_dim=2).norm(dim=-1)
+        return D
+
+    def _permutation_invariant_distance_matrix(self, g_1, g_2, w, chunk_size):
+        from scipy.optimize import linear_sum_assignment
+
+        D_squared = []
+        for i in range(0, len(g_1), chunk_size):
+            # Squared distances between all factors, of shape [chunk, M, m, m].
+            A = self.log(self.L_inv(g_1[i:i + chunk_size, None, :, None], g_2[None, :, None]))
+            if w is not None:
+                A = w * A
+            C = (A**2).sum(-1).cpu().numpy()
+            for c in C.reshape(-1, *C.shape[2:]):
+                rows, cols = linear_sum_assignment(c)
+                D_squared.append(c[rows, cols].sum())
+        return torch.tensor(D_squared, device=g_2.device).view(len(g_1), len(g_2)).sqrt()
+
 
 class Rn(Group):
     """
@@ -569,6 +622,36 @@ class MatrixGroup(ABC):
         basis given by `self.lie_algebra_basis`.
         """
         raise NotImplementedError
+
+    @torch.no_grad()
+    def distance_matrix(
+        self,
+        R_1: torch.Tensor,
+        R_2: torch.Tensor,
+        w: torch.Tensor | None = None,
+        chunk_size: int = 128,
+    ) -> torch.Tensor:
+        """
+        Compute the matrix of logarithmic distances `D[i, j] = ρ(R_1[i], R_2[j])`
+        with `ρ(R, S) = ||w * log(R^{-1} S)||`, where the norm is taken of the
+        components with respect to the Lie algebra basis.
+
+        Args:
+            `R_1`: samples of shape [N, n, n].
+            `R_2`: samples of shape [M, n, n].
+          Optional:
+            `w`: weights of the components of the generator, as in
+            `LogarithmicDistance`. Defaults to all ones.
+            `chunk_size`: number of rows of `D` computed at once, to limit memory
+            usage. Defaults to 128.
+        """
+        D = torch.empty(len(R_1), len(R_2), device=R_2.device)
+        for i in range(0, len(R_1), chunk_size):
+            a = self.lie_algebra_components(self.log(self.L_inv(R_1[i:i + chunk_size, None], R_2[None])))
+            if w is not None:
+                a = w * a
+            D[i:i + chunk_size] = a.norm(dim=-1)
+        return D
 
 
 class SO3(MatrixGroup):
@@ -1095,6 +1178,38 @@ class HomogeneousSpace(ABC):
     @abstractmethod
     def act(self, g: torch.Tensor, p: torch.Tensor) -> torch.Tensor:
         raise NotImplementedError
+
+
+    @torch.no_grad()
+    def distance_matrix(
+        self,
+        p_1: torch.Tensor,
+        p_2: torch.Tensor,
+        w: torch.Tensor | None = None,
+        chunk_size: int = 128,
+    ) -> torch.Tensor:
+        """
+        Compute the matrix of logarithmic distances `D[i, j] = ρ(p_1[i], p_2[j])`
+        with `ρ(p, q) = ||w * A||`, where `A` is the generator from
+        `get_generator(p, q)` and the norm is taken of its components with
+        respect to the Lie algebra basis of `G`.
+
+        Args:
+            `p_1`: samples of shape [N, ...].
+            `p_2`: samples of shape [M, ...].
+          Optional:
+            `w`: weights of the components of the generator, as in
+            `LogarithmicDistance`. Defaults to all ones.
+            `chunk_size`: number of rows of `D` computed at once, to limit memory
+            usage. Defaults to 128.
+        """
+        D = torch.empty(len(p_1), len(p_2), device=p_2.device)
+        for i in range(0, len(p_1), chunk_size):
+            a = self.G.lie_algebra_components(self.get_generator(p_1[i:i + chunk_size, None], p_2[None]))
+            if w is not None:
+                a = w * a
+            D[i:i + chunk_size] = a.norm(dim=-1)
+        return D
 
 
 class M3(HomogeneousSpace):

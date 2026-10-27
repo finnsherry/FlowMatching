@@ -1,0 +1,177 @@
+{
+    "R2": {
+        "epsilon": 0.03,
+        "batch_size": 1024,
+        "batches_per_epoch": 16,
+        "learning_rate": 0.01,
+        "weight_decay": 0.0,
+        "width": 64,
+        "depth": 3,
+        "shared_weights": true,
+        "loss_weights": [
+            1.0,
+            1.0
+        ],
+        "N_steps": 240,
+        "normals_to_circle": {
+            "epochs": 20
+        }
+    },
+    "R2_n": {
+        "epsilon": 0.03,
+        "batch_size": 256,
+        "batches_per_epoch": 16,
+        "learning_rate": 0.0005,
+        "weight_decay": 0.0,
+        "embed_dim": 64,
+        "num_heads": 8,
+        "expansion": 4,
+        "depth": 4,
+        "shared_weights": true,
+        "loss_weights": [
+            1.0,
+            1.0
+        ],
+        "N_steps": 120,
+        "normals_to_circle": {
+            "epochs": 100
+        }
+    },
+    "SE2": {
+        "epsilon": 0.03,
+        "batch_size": 1024,
+        "batches_per_epoch": 16,
+        "learning_rate": 0.01,
+        "weight_decay": 0.0,
+        "width": 64,
+        "depth": 3,
+        "shared_weights": true,
+        "loss_weights": [
+            1.0,
+            1.0,
+            1.0
+        ],
+        "N_steps": 240,
+        "horizontal_line_to_vertical_line": {
+            "epochs": 50
+        },
+        "vertical_line_to_vertical_line": {
+            "epochs": 50
+        },
+        "normal_to_circle": {
+            "epochs": 50
+        },
+        "vertical_line_to_circle": {
+            "epochs": 50
+        }
+    },
+    "SE2_by_R2": {
+        "epsilon": 0.03,
+        "batch_size": 1024,
+        "batches_per_epoch": 16,
+        "learning_rate": 0.01,
+        "weight_decay": 0.0,
+        "width": 64,
+        "depth": 3,
+        "shared_weights": true,
+        "loss_weights": [
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0
+        ],
+        "N_steps": 240,
+        "line_by_normal_to_line_by_circle": {
+            "epochs": 100
+        },
+        "line_by_normal_to_circle_by_circle": {
+            "epochs": 100
+        }
+    },
+    "SO3": {
+        "epsilon": 0.01,
+        "batch_size": 1024,
+        "batches_per_epoch": 16,
+        "learning_rate": 0.01,
+        "weight_decay": 0.0,
+        "width": 64,
+        "depth": 3,
+        "shared_weights": true,
+        "loss_weights": [
+            1.0,
+            1.0,
+            1.0
+        ],
+        "N_steps": 240,
+        "horizontal_line_to_vertical_line": {
+            "epochs": 50
+        },
+        "vertical_line_to_vertical_line": {
+            "epochs": 50
+        },
+        "vertical_line_to_circle": {
+            "epochs": 50
+        },
+        "circle_to_circle": {
+            "epochs": 50
+        }
+    },
+    "M3": {
+        "batch_size": 1024,
+        "batches_per_epoch": 16,
+        "learning_rate": 0.001,
+        "weight_decay": 0.0,
+        "width": 64,
+        "depth": 3,
+        "shared_weights": true,
+        "loss_weights": [
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0
+        ],
+        "N_steps": 240,
+        "line_to_line": {
+            "epochs": 1000
+        },
+        "normals_to_circle": {
+            "epochs": 1000
+        },
+        "circle_to_circle": {
+            "epochs": 1000
+        }
+    },
+    "P3": {
+        "batch_size": 1024,
+        "batches_per_epoch": 16,
+        "learning_rate": 0.01,
+        "weight_decay": 0.0,
+        "width": 64,
+        "depth": 3,
+        "shared_weights": true,
+        "loss_weights": [
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0
+        ],
+        "N_steps": 240,
+        "line_to_line": {
+            "epochs": 1000
+        },
+        "normals_to_line": {
+            "epochs": 1000
+        },
+        "circle_to_circle": {
+            "epochs": 1000
+        },
+        "wave_to_wave": {
+            "epochs": 1000
+        }
+    }
+}
