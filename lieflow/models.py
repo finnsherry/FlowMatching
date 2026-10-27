@@ -28,7 +28,6 @@ import numpy as np
 import torch
 from torch import nn
 from tqdm.auto import tqdm
-from collections.abc import Callable
 from typing import Literal
 
 from lieflow.groups import Group, HomogeneousSpace, MatrixGroup
@@ -43,7 +42,6 @@ def get_model_FM(
     embed_dim: int = 256,
     num_heads: int = 8,
     expansion: int = 4,
-    shared_weights: bool = True,
     activation: Literal[nn.ReLU, nn.GELU, nn.ELU, nn.SiLU] = nn.ReLU,
 ):
     """
@@ -63,9 +61,7 @@ def get_model_FM(
         `embed_dim`: dimension of the linear embedding of the tokens.
         `num_heads`: number of heads in the multihead attention.
         `expansion`: expansion factor in the pointwise feedforward network.
-        `shared_weights`: whether all hidden layers (or encoder blocks) share the same weights,
-          i.e. the network repeatedly applies the same layer. Defaults to
-          True.
+        `activation`: activation function. Defaults to `nn.ReLU`.
     """
     if isinstance(G, Group):
         if power_group:
@@ -75,15 +71,14 @@ def get_model_FM(
                 num_heads=num_heads,
                 expansion=expansion,
                 L=L,
-                shared_weights=shared_weights,
                 activation=activation,
             )
         else:
-            return FlowFieldGroup(G, H=H, L=L, shared_weights=shared_weights, activation=activation)
+            return FlowFieldGroup(G, H=H, L=L, activation=activation)
     elif isinstance(G, MatrixGroup):
-        return FlowFieldMatrixGroup(G, H=H, L=L, shared_weights=shared_weights, activation=activation)
+        return FlowFieldMatrixGroup(G, H=H, L=L, activation=activation)
     elif isinstance(G, HomogeneousSpace):
-        return FlowFieldHomogeneousSpace(G, H=H, L=L, shared_weights=shared_weights, activation=activation)
+        return FlowFieldHomogeneousSpace(G, H=H, L=L, activation=activation)
     else:
         raise TypeError(
             f"{G} is neither a `Group`, a `MatrixGroup`, nor a  `HomogeneousSpace`!"
@@ -99,10 +94,9 @@ class FlowFieldGroup(nn.Module):
         `G`: group of type `Group`.
       Optional:
         `H`: width of the network: number of channels. Defaults to 64.
-        `L`: depth of the network: number of layers - 2. Defaults to 2.
-        `shared_weights`: whether all hidden layers share the same weights,
-          i.e. the network repeatedly applies the same layer. Defaults to
-          True.
+        `L`: depth of the network: number of hidden layers, which are the same
+          `ResidualBlock`. Defaults to 2.
+        `activation`: activation function. Defaults to `nn.ReLU`.
 
     References:
         [1]: Y. Lipman, R.T.Q. Chen, H. Ben-Hami, M. Nickel, and M. Le.
@@ -114,16 +108,15 @@ class FlowFieldGroup(nn.Module):
     """
 
     def __init__(
-        self, G: Group, H: int = 64, L: int = 2, shared_weights: bool = True, activation: Literal[nn.ReLU, nn.GELU, nn.ELU, nn.SiLU] = nn.ReLU
+        self,
+        G: Group,
+        H: int = 64,
+        L: int = 2,
+        activation: Literal[nn.ReLU, nn.GELU, nn.ELU, nn.SiLU] = nn.ReLU,
     ):
         super().__init__()
         self.G = G
-        self.network = nn.Sequential(
-            nn.Linear(G.dim + 1, H),
-            activation(),
-            *_hidden_layers(lambda: [nn.Linear(H, H), activation()], L, shared_weights),
-            nn.Linear(H, G.dim),
-        )
+        self.network = _mlp(G.dim + 1, G.dim, H, L, activation)
 
     def forward(self, g_t: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         return self.network(torch.cat((g_t, t), dim=-1))
@@ -237,10 +230,9 @@ class FlowFieldMatrixGroup(nn.Module):
         `G`: group of type `MatrixGroup`.
       Optional:
         `H`: width of the network: number of channels. Defaults to 64.
-        `L`: depth of the network: number of layers - 2. Defaults to 2.
-        `shared_weights`: whether all hidden layers share the same weights,
-          i.e. the network repeatedly applies the same layer. Defaults to
-          True.
+        `L`: depth of the network: number of hidden layers, which are the same
+          `ResidualBlock`. Defaults to 2.
+        `activation`: activation function. Defaults to `nn.ReLU`.
 
     References:
         [1]: Y. Lipman, R.T.Q. Chen, H. Ben-Hami, M. Nickel, and M. Le.
@@ -252,16 +244,15 @@ class FlowFieldMatrixGroup(nn.Module):
     """
 
     def __init__(
-        self, G: MatrixGroup, H: int = 64, L: int = 2, shared_weights: bool = True, activation: Literal[nn.ReLU, nn.GELU, nn.ELU, nn.SiLU] = nn.ReLU
+        self,
+        G: MatrixGroup,
+        H: int = 64,
+        L: int = 2,
+        activation: Literal[nn.ReLU, nn.GELU, nn.ELU, nn.SiLU] = nn.ReLU,
     ):
         super().__init__()
         self.G = G
-        self.network = nn.Sequential(
-            nn.Linear(G.mat_dim + 1, H),
-            activation(),
-            *_hidden_layers(lambda: [nn.Linear(H, H), activation()], L, shared_weights),
-            nn.Linear(H, G.dim),
-        )
+        self.network = _mlp(G.mat_dim + 1, G.dim, H, L, activation)
 
     def forward(self, R_t: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         return self.network(
@@ -390,10 +381,9 @@ class FlowFieldHomogeneousSpace(nn.Module):
         `h`: instance of `HomogeneousSpace`.
       Optional:
         `H`: width of the network: number of channels. Defaults to 64.
-        `L`: depth of the network: number of layers - 2. Defaults to 2.
-        `shared_weights`: whether all hidden layers share the same weights,
-          i.e. the network repeatedly applies the same layer. Defaults to
-          True.
+        `L`: depth of the network: number of hidden layers, which are the same
+          `ResidualBlock`. Defaults to 2.
+        `activation`: activation function. Defaults to `nn.ReLU`.
 
     References:
         [1]: Y. Lipman, R.T.Q. Chen, H. Ben-Hami, M. Nickel, and M. Le.
@@ -409,16 +399,15 @@ class FlowFieldHomogeneousSpace(nn.Module):
     """
 
     def __init__(
-        self, h: HomogeneousSpace, H: int = 64, L: int = 2, shared_weights: bool = True, activation: Literal[nn.ReLU, nn.GELU, nn.ELU, nn.SiLU] = nn.ReLU
+        self,
+        h: HomogeneousSpace,
+        H: int = 64,
+        L: int = 2,
+        activation: Literal[nn.ReLU, nn.GELU, nn.ELU, nn.SiLU] = nn.ReLU,
     ):
         super().__init__()
         self.h = h
-        self.network = nn.Sequential(
-            nn.Linear(h.mat_dim + 1, H),
-            activation(),
-            *_hidden_layers(lambda: [nn.Linear(H, H), activation()], L, shared_weights),
-            nn.Linear(H, h.G.dim),
-        )
+        self.network = _mlp(h.mat_dim + 1, h.G.dim, H, L, activation)
 
     def forward(self, p_t: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         return self.network(torch.cat((p_t.flatten(-2, -1), t.flatten(-2, -1)), dim=-1))
@@ -537,10 +526,8 @@ class FlowFieldPowerGroup(nn.Module):
         `embed_dim`: dimension of the linear embedding of the tokens.
         `num_heads`: number of heads in the multihead attention.
         `expansion`: expansion factor in the pointwise feedforward network.
-        `L`: depth of the network: number of layers - 2. Defaults to 2.
-        `shared_weights`: whether all hidden layers share the same weights,
-          i.e. the network repeatedly applies the same layer. Defaults to
-          True.
+        `L`: depth of the network: number of encoder blocks, which are the same
+          `EncoderBlock`. Defaults to 2.
 
     References:
         [1]: Y. Lipman, R.T.Q. Chen, H. Ben-Hami, M. Nickel, and M. Le.
@@ -558,7 +545,6 @@ class FlowFieldPowerGroup(nn.Module):
         num_heads: int = 8,
         expansion: int = 4,
         L: int = 2,
-        shared_weights: bool = True,
         activation: Literal[nn.ReLU, nn.GELU, nn.ELU, nn.SiLU] = nn.ReLU,
     ):
         super().__init__()
@@ -566,9 +552,8 @@ class FlowFieldPowerGroup(nn.Module):
 
         self.network = nn.Sequential(
             nn.Linear(G.dim + 1, embed_dim),
-            *_hidden_layers(
-                lambda: [EncoderBlock(embed_dim, num_heads, expansion, activation=activation)], L, shared_weights
-            ),
+            # The same block L times, so the blocks share their weights.
+            *(L * [EncoderBlock(embed_dim, num_heads, expansion, activation=activation)]),
             nn.Linear(embed_dim, G.dim),
         )
 
@@ -718,17 +703,51 @@ class EncoderBlock(nn.Module):
         return sum(p.numel() for p in self.parameters())
 
 
-def _hidden_layers(
-    layer_maker: Callable[[], list[nn.Module]],
+def _mlp(
+    in_dim: int,
+    out_dim: int,
+    H: int,
     L: int,
-    shared_weights: bool
-) -> list[nn.Module]:
+    activation: type[nn.Module],
+) -> nn.Sequential:
     """
-    Return `L` hidden layers. If `shared_weights`, each layer has the same weights.
+    Return an MLP with `L` hidden layers of width `H`, which are the same
+    `ResidualBlock`, followed by a layer normalisation and activation before the
+    output layer.
     """
-    if shared_weights:
-        return L * [*layer_maker()]
-    return [x for _ in range(L) for x in layer_maker()]
+    return nn.Sequential(
+        nn.Linear(in_dim, H),
+        # The same block L times, so the blocks share their weights.
+        *(L * [ResidualBlock(H, activation)]),
+        nn.LayerNorm(H),
+        activation(),
+        nn.Linear(H, out_dim),
+    )
+
+
+class ResidualBlock(nn.Module):
+    """
+    Pre-activation residual block `h + W act(LayerNorm(h)) + b`. The weights `W`
+    and bias `b` are initialised to zero, so that the block starts out as the
+    identity. Since the hidden layers of the MLPs share their weights, a stack of
+    these blocks is a forward Euler discretisation of the autonomous ODE
+    `dh/ds = W act(LayerNorm(h)) + b`.
+
+    Args:
+        `H`: width of the block.
+        `activation`: activation function.
+    """
+
+    def __init__(self, H: int, activation: type[nn.Module]):
+        super().__init__()
+        self.norm = nn.LayerNorm(H)
+        self.activation = activation()
+        self.linear = nn.Linear(H, H)
+        nn.init.zeros_(self.linear.weight)
+        nn.init.zeros_(self.linear.bias)
+
+    def forward(self, h: torch.Tensor) -> torch.Tensor:
+        return h + self.linear(self.activation(self.norm(h)))
 
 
 class LogarithmicDistance(nn.Module):

@@ -8,7 +8,6 @@
         "weight_decay": 0.0,
         "width": 64,
         "depth": 3,
-        "shared_weights": true,
         "activation": "ReLU",
         "N_steps": 240,
         "epochs": 20
