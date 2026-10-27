@@ -24,6 +24,7 @@ of samples of the target distribution, which can be computed with `compare`.
 """
 
 import torch
+from scipy.optimize import linear_sum_assignment
 
 from lieflow.groups import Group, HomogeneousSpace, MatrixGroup
 
@@ -31,11 +32,8 @@ from lieflow.groups import Group, HomogeneousSpace, MatrixGroup
 def wasserstein(D: torch.Tensor) -> float:
     """
     Compute the Wasserstein-1 distance between two empirical distributions with
-    the same number of samples, given the matrix `D` of pairwise distances. For
-    uniform weights, the optimal transport plan is a permutation, which we find
-    by solving the assignment problem.
+    the same number of samples, given the matrix `D` of pairwise distances.
     """
-    from scipy.optimize import linear_sum_assignment
 
     if D.shape[0] != D.shape[1]:
         raise ValueError(f"Need the same number of samples, but D has shape {tuple(D.shape)}!")
@@ -49,9 +47,7 @@ def precision_coverage(D: torch.Tensor) -> tuple[float, float]:
     Compute the mean distance from every generated sample to the nearest target
     sample (precision), and from every target sample to the nearest generated
     sample (coverage), given the matrix `D` of pairwise distances between
-    generated samples (rows) and target samples (columns). A large precision
-    means that generated samples lie off the support of the target; a large
-    coverage means that parts of the target are not generated.
+    generated samples (rows) and target samples (columns).
     """
     return float(D.min(dim=1).values.mean()), float(D.min(dim=0).values.mean())
 

@@ -2,25 +2,21 @@
 models
 ======
 
-Implementations of flow matching[1] and shortcut modeling[2] on Lie groups
-over exponential curves,[3] as well as on position-orientation space M3, which
-is a homogeneous space of SE(3), using mav exponential curves.[4]
+Implementations of flow matching[1] on Lie groups over exponential curves,[2]
+as well as on position-orientation space M3, which is a homogeneous space
+of SE(3), using mav exponential curves.[3]
 The implementation is slightly different for groups of type `Group` than
-for those of type `MatrixGroup`; the methods `get_model_FM` and
-`get_model_SCFM` will return an instance of a flow matching and shortcut
-model, respectively, corresponding to the type of the group.
+for those of type `MatrixGroup`; the method `get_model_FM` will return an
+instance of a flow matching model, corresponding to the type of the group.
 
 References:
   [1]: Y. Lipman, R.T.Q. Chen, H. Ben-Hami, M. Nickel, and M. Le.
   "Flow Matching for Generative Modeling." arXiv preprint (2022).
   DOI:10.48550/arXiv.2210.02747.
-  [2]: K. Frans, D. Hafner, S. Levine, and P. Abbeel.
-  "One Step Diffusion via Shortcut Models." arXiv preprint (2024).
-  DOI:10.48550/arXiv.2410.12557
-  [3]: F.M. Sherry and B.M.N. Smets. "Flow Matching on Lie Groups." 7th
+  [2]: F.M. Sherry and B.M.N. Smets. "Flow Matching on Lie Groups." 7th
   International Conference on Geometric Science of Information (2025).
   DOI:10.1007/978-3-032-03918-7_6.
-  [4]: G. Bellaard and B.M.N. Smets. "Roto-Translation Invariant Metrics on
+  [3]: G. Bellaard and B.M.N. Smets. "Roto-Translation Invariant Metrics on
   Position-Orientation Space." 7th International Conference on Geometric Science
   of Information (2025).
   DOI:10.1007/978-3-032-03918-7_4.
@@ -33,6 +29,7 @@ import torch
 from torch import nn
 from tqdm.auto import tqdm
 from collections.abc import Callable
+from typing import Literal
 
 from lieflow.groups import Group, HomogeneousSpace, MatrixGroup
 from lieflow.metrics import compare
@@ -47,6 +44,7 @@ def get_model_FM(
     num_heads: int = 8,
     expansion: int = 4,
     shared_weights: bool = True,
+    activation: Literal[nn.ReLU, nn.GELU, nn.ELU, nn.SiLU] = nn.ReLU,
 ):
     """
     Return an instance of a flow matching model corresponding to the type of
@@ -78,40 +76,18 @@ def get_model_FM(
                 expansion=expansion,
                 L=L,
                 shared_weights=shared_weights,
+                activation=activation,
             )
         else:
-            return FlowFieldGroup(G, H=H, L=L, shared_weights=shared_weights)
+            return FlowFieldGroup(G, H=H, L=L, shared_weights=shared_weights, activation=activation)
     elif isinstance(G, MatrixGroup):
-        return FlowFieldMatrixGroup(G, H=H, L=L, shared_weights=shared_weights)
+        return FlowFieldMatrixGroup(G, H=H, L=L, shared_weights=shared_weights, activation=activation)
     elif isinstance(G, HomogeneousSpace):
-        return FlowFieldHomogeneousSpace(G, H=H, L=L, shared_weights=shared_weights)
+        return FlowFieldHomogeneousSpace(G, H=H, L=L, shared_weights=shared_weights, activation=activation)
     else:
         raise TypeError(
             f"{G} is neither a `Group`, a `MatrixGroup`, nor a  `HomogeneousSpace`!"
         )
-
-
-def get_model_SCFM(
-    G: Group | MatrixGroup, H: int = 64, L: int = 2, shared_weights: bool = True
-):
-    """
-    Return an instance of a shortcut model corresponding to the type of `G`.
-
-    Args:
-        `G`: group of type `Group` or `MatrixGroup`.
-      Optional:
-        `H`: width of the network: number of channels. Defaults to 64.
-        `L`: depth of the network: number of layers - 2. Defaults to 2.
-        `shared_weights`: whether all hidden layers share the same weights,
-          i.e. the network repeatedly applies the same layer. Defaults to
-          True.
-    """
-    if isinstance(G, Group):
-        return ShortCutFieldGroup(G, H=H, L=L, shared_weights=shared_weights)
-    elif isinstance(G, MatrixGroup):
-        return ShortCutFieldMatrixGroup(G, H=H, L=L, shared_weights=shared_weights)
-    else:
-        raise TypeError(f"{G} is neither a `Group` nor a `MatrixGroup`!")
 
 
 class FlowFieldGroup(nn.Module):
@@ -138,14 +114,14 @@ class FlowFieldGroup(nn.Module):
     """
 
     def __init__(
-        self, G: Group, H: int = 64, L: int = 2, shared_weights: bool = True
+        self, G: Group, H: int = 64, L: int = 2, shared_weights: bool = True, activation: Literal[nn.ReLU, nn.GELU, nn.ELU, nn.SiLU] = nn.ReLU
     ):
         super().__init__()
         self.G = G
         self.network = nn.Sequential(
             nn.Linear(G.dim + 1, H),
-            nn.ReLU(),
-            *_hidden_layers(lambda: [nn.Linear(H, H), nn.ReLU()], L, shared_weights),
+            activation(),
+            *_hidden_layers(lambda: [nn.Linear(H, H), activation()], L, shared_weights),
             nn.Linear(H, G.dim),
         )
 
@@ -177,7 +153,14 @@ class FlowFieldGroup(nn.Module):
             g_t = self.step(g_t, t, Δt)
         return g_t
 
-    def train_network(self, device, train_loader, optimizer, loss, show_progress=True):
+    def train_network(
+        self, device, train_loader, optimizer, scheduler, ema, loss, show_progress=True
+    ):
+        """
+        Train for one epoch. After every batch, step the learning rate
+        `scheduler`, and update the exponential moving average `ema` of the
+        weights, which is a `torch.optim.swa_utils.AveragedModel` of `self`.
+        """
         self.train()
         N_batches = len(train_loader)
         losses = np.zeros(N_batches)
@@ -202,6 +185,8 @@ class FlowFieldGroup(nn.Module):
             losses[i] = float(batch_loss.cpu().item())
             batch_loss.backward()
             optimizer.step()
+            scheduler.step()
+            ema.update_parameters(self)
         return losses.mean()
 
     @torch.no_grad()
@@ -243,124 +228,6 @@ class FlowFieldGroup(nn.Module):
         return sum(p.numel() for p in self.parameters())
 
 
-class ShortCutFieldGroup(nn.Module):
-    """
-    Model for shortcut modeling[1] on Lie groups of type `Group` over
-    exponential curves.[2]
-
-    Args:
-        `G`: group of type `Group`.
-      Optional:
-        `H`: width of the network: number of channels. Defaults to 64.
-        `L`: depth of the network: number of layers - 2. Defaults to 2.
-        `shared_weights`: whether all hidden layers share the same weights,
-          i.e. the network repeatedly applies the same layer. Defaults to
-          True.
-
-    References:
-        [1]: K. Frans, D. Hafner, S. Levine, and P. Abbeel.
-          "One Step Diffusion via Shortcut Models." arXiv preprint (2024).
-          DOI:10.48550/arXiv.2410.12557
-        [2]: F.M. Sherry and B.M.N. Smets. "Flow Matching on Lie Groups." 7th
-          International Conference on Geometric Science of Information (2025).
-          DOI:10.1007/978-3-032-03918-7_6.
-    """
-
-    def __init__(
-        self, G: Group, H: int = 64, L: int = 2, shared_weights: bool = True
-    ):
-        super().__init__()
-        self.G = G
-        self.network = nn.Sequential(
-            nn.Linear(G.dim + 2, H),
-            nn.ReLU(),
-            *_hidden_layers(lambda: [nn.Linear(H, H), nn.ReLU()], L, shared_weights),
-            nn.Linear(H, G.dim),
-        )
-
-    def forward(
-        self, g_t: torch.Tensor, t: torch.Tensor, Δt: torch.Tensor
-    ) -> torch.Tensor:
-        return self.network(torch.cat((g_t, t, Δt), dim=-1))
-
-    def step(
-        self, g_t: torch.Tensor, t: torch.Tensor, Δt: torch.Tensor
-    ) -> torch.Tensor:
-        t = t.view(1, 1).expand(g_t.shape[0], 1)
-        Δt = Δt.view(1, 1).expand(g_t.shape[0], 1)
-        return self.G.L(g_t, self.G.exp(Δt * self(g_t, t, Δt)))
-
-    def step_back(
-        self, g_t: torch.Tensor, t: torch.Tensor, Δt: torch.Tensor
-    ) -> torch.Tensor:
-        return self.step(g_t, t, -Δt)
-
-    @torch.no_grad()
-    def sample(self, g_0: torch.Tensor, N_steps: int = 120) -> torch.Tensor:
-        """
-        Integrate the flow from samples `g_0` at t = 0 to t = 1 in `N_steps`
-        steps.
-        """
-        self.eval()
-        Δt = torch.tensor([1.0 / N_steps], device=g_0.device, dtype=g_0.dtype)
-        g_t = g_0
-        for i in range(N_steps):
-            t = torch.tensor([i / N_steps], device=g_0.device, dtype=g_0.dtype)
-            g_t = self.step(g_t, t, Δt)
-        return g_t
-
-    def train_network(
-        self, device, train_loader, optimizer, loss, k=1 / 4, show_progress=True
-    ):
-        self.train()
-        N_batches = len(train_loader)
-        losses = np.zeros(N_batches)
-        if show_progress:
-            loop = tqdm(
-                enumerate(train_loader),
-                total=N_batches,
-                desc="Training",
-                dynamic_ncols=True,
-                unit="batch",
-                leave=False,
-            )
-        else:
-            loop = enumerate(train_loader)
-        for i, (g_0, g_1) in loop:
-            N_total = len(g_1)  # Total number of samples in batch.
-            t = torch.rand(len(g_1), 1, device=device)
-            g_0, g_1 = g_0.to(device), g_1.to(device)
-            g_t = self.G.L(g_0, self.G.exp(t * self.G.log(self.G.L_inv(g_0, g_1))))
-
-            Δt = torch.rand(N_total, 1, device=device) * (1 - t) / 2  # t + 2Δt <= 1.
-            A_t = torch.zeros_like(g_t)
-            N_SG = int(k * N_total)  # Number of samples used for self-consistency loss.
-
-            # Flow-Matching
-            g_1_FM, g_0_FM = g_1[N_SG:], g_0[N_SG:]
-            A_t[N_SG:] = self.G.log(self.G.L_inv(g_0_FM, g_1_FM))
-            Δt[N_SG:] = 0.0
-
-            # Self-Consistency
-            g_t_SG, t_SG, Δt_SG = g_t[:N_SG], t[:N_SG], Δt[:N_SG]
-            with torch.no_grad():
-                B_t = self(g_t_SG, t_SG, Δt_SG)
-                g_t_Δt = self.G.L(g_t_SG, self.G.exp(Δt_SG * B_t))
-                B_t_Δt = self(g_t_Δt, t_SG + Δt_SG, Δt_SG)
-                A_t[:N_SG] = (B_t + B_t_Δt) / 2
-
-            optimizer.zero_grad()
-            batch_loss = loss(self(g_t, t, 2 * Δt), A_t)
-            losses[i] = float(batch_loss.cpu().item())
-            batch_loss.backward()
-            optimizer.step()
-        return losses.mean()
-
-    @property
-    def parameter_count(self):
-        return sum(p.numel() for p in self.parameters())
-
-
 class FlowFieldMatrixGroup(nn.Module):
     """
     Model for flow matching[1] on Lie groups of type `MatrixGroup` over
@@ -379,23 +246,20 @@ class FlowFieldMatrixGroup(nn.Module):
         [1]: Y. Lipman, R.T.Q. Chen, H. Ben-Hami, M. Nickel, and M. Le.
           "Flow Matching for Generative Modeling." arXiv preprint (2022).
           DOI:10.48550/arXiv.2210.02747.
-        [2]: K. Frans, D. Hafner, S. Levine, and P. Abbeel.
-          "One Step Diffusion via Shortcut Models." arXiv preprint (2024).
-          DOI:10.48550/arXiv.2410.12557
-        [3]: F.M. Sherry and B.M.N. Smets. "Flow Matching on Lie Groups." 7th
+        [2]: F.M. Sherry and B.M.N. Smets. "Flow Matching on Lie Groups." 7th
           International Conference on Geometric Science of Information (2025).
           DOI:10.1007/978-3-032-03918-7_6.
     """
 
     def __init__(
-        self, G: MatrixGroup, H: int = 64, L: int = 2, shared_weights: bool = True
+        self, G: MatrixGroup, H: int = 64, L: int = 2, shared_weights: bool = True, activation: Literal[nn.ReLU, nn.GELU, nn.ELU, nn.SiLU] = nn.ReLU
     ):
         super().__init__()
         self.G = G
         self.network = nn.Sequential(
             nn.Linear(G.mat_dim + 1, H),
-            nn.ReLU(),
-            *_hidden_layers(lambda: [nn.Linear(H, H), nn.ReLU()], L, shared_weights),
+            activation(),
+            *_hidden_layers(lambda: [nn.Linear(H, H), activation()], L, shared_weights),
             nn.Linear(H, G.dim),
         )
 
@@ -439,7 +303,14 @@ class FlowFieldMatrixGroup(nn.Module):
             R_t = self.step(R_t, t, Δt)
         return R_t
 
-    def train_network(self, device, train_loader, optimizer, loss, show_progress=True):
+    def train_network(
+        self, device, train_loader, optimizer, scheduler, ema, loss, show_progress=True
+    ):
+        """
+        Train for one epoch. After every batch, step the learning rate
+        `scheduler`, and update the exponential moving average `ema` of the
+        weights, which is a `torch.optim.swa_utils.AveragedModel` of `self`.
+        """
         self.train()
         N_batches = len(train_loader)
         losses = np.zeros(N_batches)
@@ -466,6 +337,8 @@ class FlowFieldMatrixGroup(nn.Module):
             losses[i] = float(batch_loss.cpu().item())
             batch_loss.backward()
             optimizer.step()
+            scheduler.step()
+            ema.update_parameters(self)
         return losses.mean()
 
     @torch.no_grad()
@@ -507,146 +380,6 @@ class FlowFieldMatrixGroup(nn.Module):
         return sum(p.numel() for p in self.parameters())
 
 
-class ShortCutFieldMatrixGroup(nn.Module):
-    """
-    Model for shortcut modeling[1] on Lie groups of type `MatrixGroup` over
-    exponential curves.[2]
-
-    Args:
-        `G`: group of type `MatrixGroup`.
-      Optional:
-        `H`: width of the network: number of channels. Defaults to 64.
-        `L`: depth of the network: number of layers - 2. Defaults to 2.
-        `shared_weights`: whether all hidden layers share the same weights,
-          i.e. the network repeatedly applies the same layer. Defaults to
-          True.
-
-    References:
-        [1]: Y. Lipman, R.T.Q. Chen, H. Ben-Hami, M. Nickel, and M. Le.
-          "Flow Matching for Generative Modeling." arXiv preprint (2022).
-          DOI:10.48550/arXiv.2210.02747.
-        [2]: K. Frans, D. Hafner, S. Levine, and P. Abbeel.
-          "One Step Diffusion via Shortcut Models." arXiv preprint (2024).
-          DOI:10.48550/arXiv.2410.12557
-        [3]: F.M. Sherry and B.M.N. Smets. "Flow Matching on Lie Groups." 7th
-          International Conference on Geometric Science of Information (2025).
-          DOI:10.1007/978-3-032-03918-7_6.
-    """
-
-    def __init__(
-        self, G: MatrixGroup, H: int = 64, L: int = 2, shared_weights: bool = True
-    ):
-        super().__init__()
-        self.G = G
-        self.network = nn.Sequential(
-            nn.Linear(G.mat_dim + 2, H),
-            nn.ReLU(),
-            *_hidden_layers(lambda: [nn.Linear(H, H), nn.ReLU()], L, shared_weights),
-            nn.Linear(H, G.dim),
-        )
-
-    def forward(
-        self, R_t: torch.Tensor, t: torch.Tensor, Δt: torch.Tensor
-    ) -> torch.Tensor:
-        return self.network(
-            torch.cat(
-                (
-                    R_t.flatten(start_dim=-2, end_dim=-1),
-                    t.flatten(start_dim=-2, end_dim=-1),
-                    Δt.flatten(start_dim=-2, end_dim=-1),
-                ),
-                dim=-1,
-            )
-        )
-
-    def step(
-        self, R_t: torch.Tensor, t: torch.Tensor, Δt: torch.Tensor
-    ) -> torch.Tensor:
-        t = t.view(1, 1).expand(R_t.shape[0], 1, 1)
-        Δt = Δt.view(1, 1).expand(R_t.shape[0], 1, 1)
-        # Components w.r.t. Lie algebra basis.
-        a_t = self(R_t, t, Δt)
-        basis = self.G.lie_algebra_basis
-        A_t = (a_t[..., None, None] * basis).sum(-3)
-        return self.G.L(R_t, self.G.exp(Δt * A_t))
-
-    def step_back(
-        self, R_t: torch.Tensor, t: torch.Tensor, Δt: torch.Tensor
-    ) -> torch.Tensor:
-        return self.step(R_t, t, -Δt)
-
-    @torch.no_grad()
-    def sample(self, R_0: torch.Tensor, N_steps: int = 120) -> torch.Tensor:
-        """
-        Integrate the flow from samples `R_0` at t = 0 to t = 1 in `N_steps`
-        steps.
-        """
-        self.eval()
-        Δt = torch.tensor([1.0 / N_steps], device=R_0.device, dtype=R_0.dtype)
-        R_t = R_0
-        for i in range(N_steps):
-            t = torch.tensor([i / N_steps], device=R_0.device, dtype=R_0.dtype)
-            R_t = self.step(R_t, t, Δt)
-        return R_t
-
-    def train_network(
-        self, device, train_loader, optimizer, loss, k=1 / 4, show_progress=True
-    ):
-        self.train()
-        N_batches = len(train_loader)
-        losses = np.zeros(N_batches)
-        basis = self.G.lie_algebra_basis
-        if show_progress:
-            loop = tqdm(
-                enumerate(train_loader),
-                total=N_batches,
-                desc="Training",
-                dynamic_ncols=True,
-                unit="batch",
-                leave=False,
-            )
-        else:
-            loop = enumerate(train_loader)
-        for i, (R_0, R_1) in loop:
-            N_total = len(R_1)  # Total number of samples in batch.
-            t = torch.rand(len(R_1), 1, 1, device=device)
-            R_0, R_1 = R_0.to(device), R_1.to(device)
-            R_t = self.G.L(R_0, self.G.exp(t * self.G.log(self.G.L_inv(R_0, R_1))))
-
-            Δt = torch.rand(N_total, 1, 1, device=device) * (1 - t) / 2  # t + 2Δt <= 1.
-            A_t = torch.zeros_like(R_t)
-            N_SG = int(k * N_total)  # Number of samples used for self-consistency loss.
-
-            # Flow-Matching
-            R_1_FM, R_0_FM = R_1[N_SG:], R_0[N_SG:]
-            A_t[N_SG:] = self.G.log(self.G.L_inv(R_0_FM, R_1_FM))
-            Δt[N_SG:] = 0.0
-
-            # Self-Consistency
-            R_t_SG, t_SG, Δt_SG = R_t[:N_SG], t[:N_SG], Δt[:N_SG]
-            with torch.no_grad():
-                b_t = self(R_t_SG, t_SG, Δt_SG)
-                B_t = (b_t[..., None, None] * basis).sum(-3)
-                R_t_Δt = self.G.L(R_t_SG, self.G.exp(Δt_SG * B_t))
-                b_t_Δt = self(R_t_Δt, t_SG + Δt_SG, Δt_SG)
-                B_t_Δt = (b_t_Δt[..., None, None] * basis).sum(-3)
-                A_t[:N_SG] = (B_t + B_t_Δt) / 2
-
-            # Components w.r.t. Lie algebra basis.
-            a_t = self.G.lie_algebra_components(A_t)
-
-            optimizer.zero_grad()
-            batch_loss = loss(self(R_t, t, 2 * Δt), a_t)
-            losses[i] = float(batch_loss.cpu().item())
-            batch_loss.backward()
-            optimizer.step()
-        return losses.mean()
-
-    @property
-    def parameter_count(self):
-        return sum(p.numel() for p in self.parameters())
-
-
 class FlowFieldHomogeneousSpace(nn.Module):
     """
     Model for flow matching[1] on Lie group homogeneous spaces.
@@ -676,14 +409,14 @@ class FlowFieldHomogeneousSpace(nn.Module):
     """
 
     def __init__(
-        self, h: HomogeneousSpace, H: int = 64, L: int = 2, shared_weights: bool = True
+        self, h: HomogeneousSpace, H: int = 64, L: int = 2, shared_weights: bool = True, activation: Literal[nn.ReLU, nn.GELU, nn.ELU, nn.SiLU] = nn.ReLU
     ):
         super().__init__()
         self.h = h
         self.network = nn.Sequential(
             nn.Linear(h.mat_dim + 1, H),
-            nn.ReLU(),
-            *_hidden_layers(lambda: [nn.Linear(H, H), nn.ReLU()], L, shared_weights),
+            activation(),
+            *_hidden_layers(lambda: [nn.Linear(H, H), activation()], L, shared_weights),
             nn.Linear(H, h.G.dim),
         )
 
@@ -716,7 +449,14 @@ class FlowFieldHomogeneousSpace(nn.Module):
             p_t = self.step(p_t, t, Δt)
         return p_t
 
-    def train_network(self, device, train_loader, optimizer, loss, show_progress=True):
+    def train_network(
+        self, device, train_loader, optimizer, scheduler, ema, loss, show_progress=True
+    ):
+        """
+        Train for one epoch. After every batch, step the learning rate
+        `scheduler`, and update the exponential moving average `ema` of the
+        weights, which is a `torch.optim.swa_utils.AveragedModel` of `self`.
+        """
         self.train()
         N_batches = len(train_loader)
         losses = np.zeros(N_batches)
@@ -743,6 +483,8 @@ class FlowFieldHomogeneousSpace(nn.Module):
             losses[i] = float(batch_loss.cpu().item())
             batch_loss.backward()
             optimizer.step()
+            scheduler.step()
+            ema.update_parameters(self)
         return losses.mean()
 
     @torch.no_grad()
@@ -817,6 +559,7 @@ class FlowFieldPowerGroup(nn.Module):
         expansion: int = 4,
         L: int = 2,
         shared_weights: bool = True,
+        activation: Literal[nn.ReLU, nn.GELU, nn.ELU, nn.SiLU] = nn.ReLU,
     ):
         super().__init__()
         self.G = G
@@ -824,7 +567,7 @@ class FlowFieldPowerGroup(nn.Module):
         self.network = nn.Sequential(
             nn.Linear(G.dim + 1, embed_dim),
             *_hidden_layers(
-                lambda: [EncoderBlock(embed_dim, num_heads, expansion)], L, shared_weights
+                lambda: [EncoderBlock(embed_dim, num_heads, expansion, activation=activation)], L, shared_weights
             ),
             nn.Linear(embed_dim, G.dim),
         )
@@ -857,7 +600,14 @@ class FlowFieldPowerGroup(nn.Module):
             g_t = self.step(g_t, t, Δt)
         return g_t
 
-    def train_network(self, device, train_loader, optimizer, loss, show_progress=True):
+    def train_network(
+        self, device, train_loader, optimizer, scheduler, ema, loss, show_progress=True
+    ):
+        """
+        Train for one epoch. After every batch, step the learning rate
+        `scheduler`, and update the exponential moving average `ema` of the
+        weights, which is a `torch.optim.swa_utils.AveragedModel` of `self`.
+        """
         self.train()
         N_batches = len(train_loader)
         losses = np.zeros(N_batches)
@@ -882,6 +632,8 @@ class FlowFieldPowerGroup(nn.Module):
             losses[i] = float(batch_loss.cpu().item())
             batch_loss.backward()
             optimizer.step()
+            scheduler.step()
+            ema.update_parameters(self)
         return losses.mean()
 
     @torch.no_grad()
@@ -944,15 +696,15 @@ class EncoderBlock(nn.Module):
         `num_heads`: number of heads in the multihead attention.
         `expansion`: expansion factor in the pointwise feedforward network.
     """
-
-    def __init__(self, embed_dim: int, num_heads: int, expansion: int):
+    
+    def __init__(self, embed_dim: int, num_heads: int, expansion: int, activation: Literal[nn.ReLU, nn.GELU, nn.ELU, nn.SiLU] = nn.ReLU):
         super().__init__()
         self.attn = nn.MultiheadAttention(embed_dim, num_heads, batch_first=True)
         self.ln1 = nn.LayerNorm(embed_dim)
         self.ln2 = nn.LayerNorm(embed_dim)
         self.ff = nn.Sequential(
             nn.Linear(embed_dim, expansion * embed_dim),
-            nn.ReLU(),
+            activation(),
             nn.Linear(expansion * embed_dim, embed_dim),
         )
 

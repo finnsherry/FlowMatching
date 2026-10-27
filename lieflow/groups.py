@@ -37,6 +37,7 @@ from abc import ABC, abstractmethod
 from typing import Literal
 
 import torch
+from scipy.optimize import linear_sum_assignment
 
 
 class Group(ABC):
@@ -120,11 +121,9 @@ class Group(ABC):
         return D
 
     def _permutation_invariant_distance_matrix(self, g_1, g_2, w, chunk_size):
-        from scipy.optimize import linear_sum_assignment
 
         D_squared = []
         for i in range(0, len(g_1), chunk_size):
-            # Squared distances between all factors, of shape [chunk, M, m, m].
             A = self.log(self.L_inv(g_1[i:i + chunk_size, None, :, None], g_2[None, :, None]))
             if w is not None:
                 A = w * A
@@ -1392,16 +1391,35 @@ class P3(HomogeneousSpace):
 
         match generator:
             case "spacelike":
-                w = _arccosh(i)
-                k = w * ks
+                # The axis `ks` is undefined if `n_1 = n_2`, and `arccosh(i)` is
+                # ill-conditioned for `i -> 1`. Hence, we write `n_1 x n_2 =
+                # sinh(w) ks`, so that `k = w ks = asinh(s) / s n_1 x n_2` with
+                # `s = sinh(w)`, and write the translation part
+                # `-k x (x_m - coth(w / 2) / 2 ks x x_par) + x_perp` as
+                # `x_diff - k x x_m + (w / 2 coth(w / 2) - 1) x_par`, using
+                # `ks x (ks x x_par) = x_par`. All terms are then well-defined
+                # and accurate as `n_2 -> n_1`.
+                ε_stab = 1e-2
+                n_cross = hyperbolic_cross_product(n_1, n_2)
+                s_squared = (-(n_cross @ self.η * n_cross).sum(-1, keepdim=True)).clamp_min(0.0)
+                positive = s_squared > 0.0
+                s = torch.where(positive, torch.where(positive, s_squared, 1.0).sqrt(), 0.0)
+                w = torch.asinh(s)
+                small = s < ε_stab
+                asinhc = torch.where(
+                    small, 1.0 - s**2 / 6.0 + 3.0 * s**4 / 40.0, w / torch.where(small, 1.0, s)
+                )
+                k = asinhc * n_cross
 
-                x_perp = -1.0 * (ks @ self.η * x_diff).sum(-1, keepdim=True) * ks
-                x_par = x_diff - x_perp
+                w_safe = torch.where(small, 1.0, w)
+                xcoth_minus_1 = torch.where(
+                    small, w**2 / 12.0 - w**4 / 720.0, (w_safe / 2.0) / torch.tanh(w_safe / 2.0) - 1.0
+                )
+                ks_safe = n_cross / torch.where(positive, s, 1.0)
+                x_par = x_diff + (ks_safe @ self.η * x_diff).sum(-1, keepdim=True) * ks_safe
 
-                c = (
-                    x_m - 0.5 * _cotanh(w / 2.0) * hyperbolic_cross_product(ks, x_par)
-                ).nan_to_num()
-                v = x_perp
+                c = torch.zeros_like(x_diff)
+                v = x_diff - hyperbolic_cross_product(k, x_m) + xcoth_minus_1 * x_par
             case "timelike":
                 θ = torch.tensor([torch.pi], device=device)
                 k = θ * kt
