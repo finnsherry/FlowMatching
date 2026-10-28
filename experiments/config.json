@@ -8,12 +8,12 @@
         "weight_decay": 0.0,
         "width": 64,
         "depth": 3,
-        "activation": "ReLU",
         "N_steps": 240,
         "epochs": 20
     },
     "R2": {
         "batches_per_epoch": 16,
+        "ema_decay": 0.9,
         "loss_weights": [
             1.0,
             1.0
@@ -23,8 +23,8 @@
     "R2_n": {
         "batch_size": 256,
         "batches_per_epoch": 80,
-        "learning_rate": 0.0005,
-        "learning_rate_final": 5e-06,
+        "learning_rate": 0.003,
+        "learning_rate_final": 3e-05,
         "embed_dim": 64,
         "num_heads": 8,
         "expansion": 4,
@@ -38,6 +38,8 @@
     },
     "SE2": {
         "batches_per_epoch": 40,
+        "ema_decay": 0.9,
+        "depth": 5,
         "loss_weights": [
             1.0,
             1.0,
@@ -63,9 +65,7 @@
     "SO3": {
         "epsilon": 0.01,
         "batches_per_epoch": 160,
-        "learning_rate": 0.03,
-        "learning_rate_final": 0.0003,
-        "activation": "GELU",
+        "ema_decay": 0.9,
         "loss_weights": [
             1.0,
             1.0,
@@ -78,10 +78,7 @@
     },
     "M3": {
         "batches_per_epoch": 800,
-        "learning_rate": 0.01,
-        "learning_rate_final": 0.0001,
         "ema_decay": 0.999,
-        "activation": "ReLU",
         "loss_weights": [
             1.0,
             1.0,
