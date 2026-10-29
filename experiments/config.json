@@ -12,8 +12,7 @@
         "epochs": 20
     },
     "R2": {
-        "batches_per_epoch": 16,
-        "ema_decay": 0.9,
+        "batches_per_epoch": 160,
         "loss_weights": [
             1.0,
             1.0
@@ -22,12 +21,12 @@
     },
     "R2_n": {
         "batch_size": 256,
-        "batches_per_epoch": 80,
+        "batches_per_epoch": 320,
         "learning_rate": 0.003,
         "learning_rate_final": 3e-05,
         "embed_dim": 64,
         "num_heads": 8,
-        "expansion": 4,
+        "expansion": 2,
         "depth": 4,
         "loss_weights": [
             1.0,
@@ -37,9 +36,7 @@
         "normals_to_circle": {}
     },
     "SE2": {
-        "batches_per_epoch": 40,
-        "ema_decay": 0.9,
-        "depth": 5,
+        "batches_per_epoch": 640,
         "loss_weights": [
             1.0,
             1.0,
@@ -51,7 +48,7 @@
         "vertical_line_to_circle": {}
     },
     "SE2_by_R2": {
-        "batches_per_epoch": 80,
+        "batches_per_epoch": 1280,
         "loss_weights": [
             1.0,
             1.0,
@@ -64,8 +61,7 @@
     },
     "SO3": {
         "epsilon": 0.01,
-        "batches_per_epoch": 160,
-        "ema_decay": 0.9,
+        "batches_per_epoch": 640,
         "loss_weights": [
             1.0,
             1.0,
@@ -73,12 +69,13 @@
         ],
         "horizontal_line_to_vertical_line": {},
         "vertical_line_to_vertical_line": {},
-        "vertical_line_to_circle": {},
+        "vertical_line_to_circle": {
+            "N_steps": 1920
+        },
         "circle_to_circle": {}
     },
     "M3": {
         "batches_per_epoch": 800,
-        "ema_decay": 0.999,
         "loss_weights": [
             1.0,
             1.0,
@@ -92,8 +89,8 @@
         "circle_to_circle": {}
     },
     "P3": {
-        "batches_per_epoch": 800,
-        "ema_decay": 0.999,
+        "batches_per_epoch": 3200,
+        "N_steps": 960,
         "loss_weights": [
             1.0,
             1.0,

@@ -837,6 +837,17 @@ class SE3(MatrixGroup):
 
         return c * ~parallel, t * parallel + t_par * ~parallel, ω, R
 
+    def exp(self, A, ε_stab=0.0001):
+        """
+        Lie group exponential of `A`. Writing `A = [[ω, v], [0, 0]]`, we have
+        `exp(A) = [[exp(ω), V v], [0, 1]]`, where `exp(ω) = I + F_1 ω + F_2 ω^2`
+        is the Rodrigues formula, and `V = I + F_2 ω + F_3 ω^2`, with
+        `F_3(θ^2) = (θ - sin(θ)) / θ^3`.
+        """
+        ω, v = A[..., :3, :3], A[..., :3, 3:]
+        θ_squared = (self.so3.lie_algebra_components(ω) ** 2).sum(-1)[..., None, None]
+        return _exp_affine(ω, v, θ_squared, ε_stab)
+
     def get_translation_rotation(self, g):
         t = g[..., :3, -1]
         R = g[..., :3, :3]
@@ -968,21 +979,7 @@ class SOplus12(MatrixGroup):
         """
         A_vec = self.lie_algebra_components(A)
         s_squared = (A_vec @ self.η.to(A.dtype) * A_vec).sum(-1)[..., None, None]
-
-        small = s_squared.abs() < ε_stab
-        timelike = s_squared > 0.0
-        θ = torch.where(small, 1.0, s_squared.abs()).sqrt()
-
-        F_1 = torch.where(
-            small,
-            1 - s_squared / 6 + s_squared**2 / 120 - s_squared**3 / 5040,
-            torch.where(timelike, _sinc(θ), _sinhc(θ)),
-        )
-        F_2 = torch.where(
-            small,
-            1 / 2 - s_squared / 24 + s_squared**2 / 720 - s_squared**3 / 40320,
-            torch.where(timelike, _sinc(θ / 2) ** 2, _sinhc(θ / 2) ** 2) / 2,
-        )
+        F_1, F_2, _ = _rodrigues_coefficients(s_squared, ε_stab)
 
         return torch.eye(3, device=A.device, dtype=A.dtype) + F_1 * A + F_2 * A @ A
 
@@ -1127,6 +1124,18 @@ class SEplus12(MatrixGroup):
             ω,
             Λ,
         )
+
+    def exp(self, A, ε_stab=0.0001):
+        """
+        Lie group exponential of `A`. Writing `A = [[ω, v], [0, 0]]`, we have
+        `exp(A) = [[exp(ω), V v], [0, 1]]`, where `exp(ω) = I + F_1 ω + F_2 ω^2`
+        is the generalised Rodrigues formula of `SOplus12.exp`, and
+        `V = I + F_2 ω + F_3 ω^2`, with `F_3(s^2) = (s - sin(s)) / s^3`.
+        """
+        ω, v = A[..., :3, :3], A[..., :3, 3:]
+        k = self.soplus12.lie_algebra_components(ω)
+        s_squared = (k @ self.η.to(A.dtype) * k).sum(-1)[..., None, None]
+        return _exp_affine(ω, v, s_squared, ε_stab)
 
     def get_translation_lorentz(self, g):
         t = g[..., :3, -1]
@@ -1557,8 +1566,68 @@ def _sinc(x: torch.Tensor) -> torch.Tensor:
 
 def _sinhc(x: torch.Tensor) -> torch.Tensor:
     return torch.where(
-        x.abs() < 1.0, 1 + x**2 / 6.0 + x**4 / 120.0 + x**6 / 5040, torch.sinh(x) / x
+        x.abs() < 1.0,
+        1 + x**2 / 6.0 + x**4 / 120.0 + x**6 / 5040 + x**8 / 362880 + x**10 / 39916800,
+        torch.sinh(x) / x,
     )
+
+
+def _rodrigues_coefficients(
+    s_squared: torch.Tensor, ε_stab: float = 0.0001
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """
+    Compute `F_1(s^2) = sin(s) / s`, `F_2(s^2) = (1 - cos(s)) / s^2`, and
+    `F_3(s^2) = (s - sin(s)) / s^3` if `s^2 > 0`, and their hyperbolic analogues
+    if `s^2 < 0`. If `A^3 = -s^2 A`, then `exp(A) = I + F_1 A + F_2 A^2` and
+    `int_0^1 exp(τ A) dτ = I + F_2 A + F_3 A^2`. Since the `F_i` are analytic in
+    `s^2`, we use their Taylor expansions if `|s^2| < ε_stab`, or `|s^2| < 1`
+    for `F_3`, which suffers more from cancellation.
+    """
+    small = s_squared.abs() < ε_stab
+    timelike = s_squared > 0.0
+    θ = torch.where(small, 1.0, s_squared.abs()).sqrt()
+
+    F_1 = torch.where(
+        small,
+        1 - s_squared / 6 + s_squared**2 / 120 - s_squared**3 / 5040,
+        torch.where(timelike, _sinc(θ), _sinhc(θ)),
+    )
+    F_2 = torch.where(
+        small,
+        1 / 2 - s_squared / 24 + s_squared**2 / 720 - s_squared**3 / 40320,
+        torch.where(timelike, _sinc(θ / 2) ** 2, _sinhc(θ / 2) ** 2) / 2,
+    )
+    small_3 = s_squared.abs() < 1.0
+    θ_3 = torch.where(small_3, 1.0, s_squared.abs()).sqrt()
+    F_3 = torch.where(
+        small_3,
+        1 / 6
+        - s_squared / 120
+        + s_squared**2 / 5040
+        - s_squared**3 / 362880
+        + s_squared**4 / 39916800
+        - s_squared**5 / 6227020800,
+        torch.where(timelike, θ_3 - torch.sin(θ_3), torch.sinh(θ_3) - θ_3) / θ_3**3,
+    )
+    return F_1, F_2, F_3
+
+
+def _exp_affine(
+    ω: torch.Tensor, v: torch.Tensor, s_squared: torch.Tensor, ε_stab: float = 0.0001
+) -> torch.Tensor:
+    """
+    Compute `exp([[ω, v], [0, 0]]) = [[exp(ω), V v], [0, 1]]` for `ω` with
+    `ω^3 = -s^2 ω`, where `exp(ω) = I + F_1 ω + F_2 ω^2` and
+    `V = I + F_2 ω + F_3 ω^2`, with `F_i` as in `_rodrigues_coefficients`.
+    """
+    F_1, F_2, F_3 = _rodrigues_coefficients(s_squared, ε_stab)
+    I = torch.eye(3, device=ω.device, dtype=ω.dtype)
+    ω_squared = ω @ ω
+    g = torch.zeros(*ω.shape[:-2], 4, 4, device=ω.device, dtype=ω.dtype)
+    g[..., :3, :3] = I + F_1 * ω + F_2 * ω_squared
+    g[..., :3, 3:] = (I + F_2 * ω + F_3 * ω_squared) @ v
+    g[..., 3, 3] = 1.0
+    return g
 
 
 def _sigmoid(x: torch.Tensor, scale=88.0) -> torch.Tensor:

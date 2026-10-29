@@ -148,33 +148,22 @@ class FlowFieldGroup(nn.Module):
         `scheduler`, and update the exponential moving average `ema` of the
         weights, which is a `torch.optim.swa_utils.AveragedModel` of `self`.
         """
-        self.train()
-        N_batches = len(train_loader)
-        losses = np.zeros(N_batches)
-        if show_progress:
-            loop = tqdm(
-                enumerate(train_loader),
-                total=N_batches,
-                desc="Training",
-                dynamic_ncols=True,
-                unit="batch",
-                leave=False,
-            )
-        else:
-            loop = enumerate(train_loader)
-        for i, (g_0, g_1) in loop:
-            t = torch.rand(len(g_1), 1, device=device)
-            g_0, g_1 = g_0.to(device), g_1.to(device)
-            A_t = self.G.log(self.G.L_inv(g_0, g_1))
-            g_t = self.G.L(g_0, self.G.exp(t * A_t))
-            optimizer.zero_grad()
-            batch_loss = loss(self(g_t, t), A_t)
-            losses[i] = float(batch_loss.cpu().item())
-            batch_loss.backward()
-            optimizer.step()
-            scheduler.step()
-            ema.update_parameters(self)
-        return losses.mean()
+        return _train_epoch(
+            self, device, train_loader, optimizer, scheduler, ema, loss, show_progress
+        )
+
+    def training_pairs(
+        self, g_0: torch.Tensor, g_1: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """
+        Return the points `g_t` at uniformly random times `t` on the exponential
+        curves from `g_0` to `g_1`, the times `t`, and the generators `A_t` of
+        the curves, which are the regression targets.
+        """
+        t = torch.rand(len(g_1), 1, device=g_1.device)
+        A_t = self.G.log(self.G.L_inv(g_0, g_1))
+        g_t = self.G.L(g_0, self.G.exp(t * A_t))
+        return g_t, t, A_t
 
     @torch.no_grad()
     def evaluate(
@@ -294,35 +283,24 @@ class FlowFieldMatrixGroup(nn.Module):
         `scheduler`, and update the exponential moving average `ema` of the
         weights, which is a `torch.optim.swa_utils.AveragedModel` of `self`.
         """
-        self.train()
-        N_batches = len(train_loader)
-        losses = np.zeros(N_batches)
-        if show_progress:
-            loop = tqdm(
-                enumerate(train_loader),
-                total=N_batches,
-                desc="Training",
-                dynamic_ncols=True,
-                unit="batch",
-                leave=False,
-            )
-        else:
-            loop = enumerate(train_loader)
-        for i, (R_0, R_1) in loop:
-            t = torch.rand(len(R_1), 1, 1, device=device)
-            R_0, R_1 = R_0.to(device), R_1.to(device)
-            A_t = self.G.log(self.G.L_inv(R_0, R_1))
-            R_t = self.G.L(R_0, self.G.exp(t * A_t))
-            # Components w.r.t. Lie algebra basis.
-            a_t = self.G.lie_algebra_components(A_t)
-            optimizer.zero_grad()
-            batch_loss = loss(self(R_t, t), a_t)
-            losses[i] = float(batch_loss.cpu().item())
-            batch_loss.backward()
-            optimizer.step()
-            scheduler.step()
-            ema.update_parameters(self)
-        return losses.mean()
+        return _train_epoch(
+            self, device, train_loader, optimizer, scheduler, ema, loss, show_progress
+        )
+
+    def training_pairs(
+        self, R_0: torch.Tensor, R_1: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """
+        Return the points `R_t` at uniformly random times `t` on the exponential
+        curves from `R_0` to `R_1`, the times `t`, and the components `a_t` of
+        the generators of the curves, which are the regression targets.
+        """
+        t = torch.rand(len(R_1), 1, 1, device=R_1.device)
+        A_t = self.G.log(self.G.L_inv(R_0, R_1))
+        R_t = self.G.L(R_0, self.G.exp(t * A_t))
+        # Components w.r.t. Lie algebra basis.
+        a_t = self.G.lie_algebra_components(A_t)
+        return R_t, t, a_t
 
     @torch.no_grad()
     def evaluate(
@@ -436,35 +414,23 @@ class FlowFieldHomogeneousSpace(nn.Module):
         `scheduler`, and update the exponential moving average `ema` of the
         weights, which is a `torch.optim.swa_utils.AveragedModel` of `self`.
         """
-        self.train()
-        N_batches = len(train_loader)
-        losses = np.zeros(N_batches)
-        if show_progress:
-            loop = tqdm(
-                enumerate(train_loader),
-                total=N_batches,
-                desc="Training",
-                dynamic_ncols=True,
-                unit="batch",
-                leave=False,
-            )
-        else:
-            loop = enumerate(train_loader)
-        for i, (p_0, p_1) in loop:
-            t = torch.rand(len(p_1), 1, 1, device=device)
-            p_0, p_1 = p_0.to(device), p_1.to(device)
-            A_t = self.h.get_generator(p_0, p_1)
-            g_t = self.h.G.exp(t * A_t)
-            p_t = self.h.act(g_t, p_0)
-            a_t = self.h.G.lie_algebra_components(A_t)
-            optimizer.zero_grad()
-            batch_loss = loss(self(p_t, t), a_t)
-            losses[i] = float(batch_loss.cpu().item())
-            batch_loss.backward()
-            optimizer.step()
-            scheduler.step()
-            ema.update_parameters(self)
-        return losses.mean()
+        return _train_epoch(
+            self, device, train_loader, optimizer, scheduler, ema, loss, show_progress
+        )
+
+    def training_pairs(
+        self, p_0: torch.Tensor, p_1: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """
+        Return the points `p_t` at uniformly random times `t` on the exponential
+        curves from `p_0` to `p_1`, the times `t`, and the components `a_t` of
+        the generators of the curves, which are the regression targets.
+        """
+        t = torch.rand(len(p_1), 1, 1, device=p_1.device)
+        A_t = self.h.get_generator(p_0, p_1)
+        p_t = self.h.act(self.h.G.exp(t * A_t), p_0)
+        a_t = self.h.G.lie_algebra_components(A_t)
+        return p_t, t, a_t
 
     @torch.no_grad()
     def evaluate(
@@ -582,33 +548,22 @@ class FlowFieldPowerGroup(nn.Module):
         `scheduler`, and update the exponential moving average `ema` of the
         weights, which is a `torch.optim.swa_utils.AveragedModel` of `self`.
         """
-        self.train()
-        N_batches = len(train_loader)
-        losses = np.zeros(N_batches)
-        if show_progress:
-            loop = tqdm(
-                enumerate(train_loader),
-                total=N_batches,
-                desc="Training",
-                dynamic_ncols=True,
-                unit="batch",
-                leave=False,
-            )
-        else:
-            loop = enumerate(train_loader)
-        for i, (g_0, g_1) in loop:
-            t = torch.rand(len(g_1), 1, 1, device=device).expand(*g_1.shape[:-1], 1)
-            g_0, g_1 = g_0.to(device), g_1.to(device)
-            A_t = self.G.log(self.G.L_inv(g_0, g_1))
-            g_t = self.G.L(g_0, self.G.exp(t * A_t))
-            optimizer.zero_grad()
-            batch_loss = loss(self(g_t, t), A_t)
-            losses[i] = float(batch_loss.cpu().item())
-            batch_loss.backward()
-            optimizer.step()
-            scheduler.step()
-            ema.update_parameters(self)
-        return losses.mean()
+        return _train_epoch(
+            self, device, train_loader, optimizer, scheduler, ema, loss, show_progress
+        )
+
+    def training_pairs(
+        self, g_0: torch.Tensor, g_1: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """
+        Return the points `g_t` at uniformly random times `t` on the exponential
+        curves from `g_0` to `g_1`, the times `t`, and the generators `A_t` of
+        the curves, which are the regression targets.
+        """
+        t = torch.rand(len(g_1), 1, 1, device=g_1.device).expand(*g_1.shape[:-1], 1)
+        A_t = self.G.log(self.G.L_inv(g_0, g_1))
+        g_t = self.G.L(g_0, self.G.exp(t * A_t))
+        return g_t, t, A_t
 
     @torch.no_grad()
     def evaluate(
@@ -780,17 +735,73 @@ def ρ_c_normalised(
     return (w**2 * (A_2 - A_1) ** 2).mean()
 
 
+def _train_epoch(
+    model, device, train_loader, optimizer, scheduler, ema, loss, show_progress
+):
+    """
+    Train `model` for one epoch. If `train_loader` has a method `blocks`, such
+    as `DataGenerator`, the training pairs are computed for blocks of several
+    batches at once, which is much faster for small batches. After every batch,
+    step the learning rate `scheduler`, and update the exponential moving
+    average `ema` of the weights.
+    """
+    model.train()
+    N_batches = len(train_loader)
+    losses = np.zeros(N_batches)
+    progress = (
+        tqdm(total=N_batches, desc="Training", dynamic_ncols=True, unit="batch", leave=False)
+        if show_progress
+        else None
+    )
+    if hasattr(train_loader, "blocks"):
+        blocks = train_loader.blocks()
+    else:
+        blocks = ((g_0, g_1, len(g_1)) for g_0, g_1 in train_loader)
+    i = 0
+    for g_0, g_1, batch_size in blocks:
+        x_t, t, target = model.training_pairs(g_0.to(device), g_1.to(device))
+        for x_t_batch, t_batch, target_batch in zip(
+            x_t.split(batch_size), t.split(batch_size), target.split(batch_size)
+        ):
+            optimizer.zero_grad()
+            batch_loss = loss(model(x_t_batch, t_batch), target_batch)
+            losses[i] = float(batch_loss.cpu().item())
+            batch_loss.backward()
+            optimizer.step()
+            scheduler.step()
+            ema.update_parameters(model)
+            i += 1
+            if progress is not None:
+                progress.update()
+    if progress is not None:
+        progress.close()
+    return losses.mean()
+
+
 class DataGenerator:
-    """Draws new pairs (g_0, g_1) for every batch."""
-    def __init__(self, generate_g_0, generate_g_1, batch_size, batches_per_epoch):
+    """
+    Draws new pairs (g_0, g_1) for every batch. The samples are drawn for
+    `batches_per_block` batches at once, which is much faster for small batches:
+    `blocks` yields these blocks, iterating yields single batches.
+    """
+    def __init__(
+        self, generate_g_0, generate_g_1, batch_size, batches_per_epoch, batches_per_block=16
+    ):
         self.generate_g_0 = generate_g_0
         self.generate_g_1 = generate_g_1
         self.batch_size = batch_size
         self.batches_per_epoch = batches_per_epoch
+        self.batches_per_block = batches_per_block
 
     def __len__(self):
         return self.batches_per_epoch
 
+    def blocks(self):
+        """Yield blocks `(g_0, g_1, batch_size)` of several batches."""
+        for start in range(0, self.batches_per_epoch, self.batches_per_block):
+            N = min(self.batches_per_block, self.batches_per_epoch - start) * self.batch_size
+            yield self.generate_g_0(N), self.generate_g_1(N), self.batch_size
+
     def __iter__(self):
-        for _ in range(self.batches_per_epoch):
-            yield self.generate_g_0(self.batch_size), self.generate_g_1(self.batch_size)
+        for g_0, g_1, batch_size in self.blocks():
+            yield from zip(g_0.split(batch_size), g_1.split(batch_size))
