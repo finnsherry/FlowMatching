@@ -8,7 +8,7 @@
         "weight_decay": 0.0,
         "width": 64,
         "depth": 3,
-        "N_steps": 240,
+        "N_steps": 120,
         "epochs": 20
     },
     "R2": {
@@ -45,7 +45,9 @@
         "horizontal_line_to_vertical_line": {},
         "vertical_line_to_vertical_line": {},
         "normal_to_circle": {},
-        "vertical_line_to_circle": {}
+        "vertical_line_to_circle": {
+            "N_steps": 480
+        }
     },
     "SE2_by_R2": {
         "batches_per_epoch": 1280,
@@ -57,10 +59,11 @@
             1.0
         ],
         "line_by_normal_to_line_by_circle": {},
-        "line_by_normal_to_circle_by_circle": {}
+        "line_by_normal_to_circle_by_circle": {
+            "N_steps": 240
+        }
     },
     "SO3": {
-        "epsilon": 0.01,
         "batches_per_epoch": 640,
         "loss_weights": [
             1.0,
@@ -70,12 +73,15 @@
         "horizontal_line_to_vertical_line": {},
         "vertical_line_to_vertical_line": {},
         "vertical_line_to_circle": {
-            "N_steps": 1920
+            "N_steps": 960
         },
-        "circle_to_circle": {}
+        "circle_to_circle": {
+            "N_steps": 480
+        }
     },
     "M3": {
         "batches_per_epoch": 800,
+        "width": 128,
         "loss_weights": [
             1.0,
             1.0,
@@ -84,13 +90,15 @@
             1.0,
             1.0
         ],
-        "line_to_line": {},
+        "line_to_line": {
+            "N_steps": 240
+        },
         "normals_to_circle": {},
         "circle_to_circle": {}
     },
     "P3": {
         "batches_per_epoch": 3200,
-        "N_steps": 960,
+        "width": 128,
         "loss_weights": [
             1.0,
             1.0,
@@ -102,6 +110,8 @@
         "line_to_line": {},
         "normals_to_line": {},
         "circle_to_circle": {},
-        "wave_to_wave": {}
+        "wave_to_wave": {
+            "N_steps": 240
+        }
     }
 }

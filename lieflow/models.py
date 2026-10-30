@@ -115,30 +115,47 @@ class FlowFieldGroup(nn.Module):
     def forward(self, g_t: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         return self.network(torch.cat((g_t, t), dim=-1))
 
-    def step(
-        self, g_t: torch.Tensor, t: torch.Tensor, Δt: torch.Tensor
-    ) -> torch.Tensor:
+    def velocity(self, g_t: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        """
+        Return the components of the flow field at `g_t` at the time `t`.
+        """
         t = t.view(1, 1).expand(g_t.shape[0], 1)
-        return self.G.L(g_t, self.G.exp(Δt * self(g_t, t)))
+        return self(g_t, t)
+
+    def advance(
+        self, g_t: torch.Tensor, v: torch.Tensor, Δt: torch.Tensor
+    ) -> torch.Tensor:
+        """
+        Follow the exponential curve with generator components `v` from `g_t`
+        for a time `Δt`.
+        """
+        return self.G.L(g_t, self.G.exp(Δt * v))
+
+    def step(
+        self, g_t: torch.Tensor, t: torch.Tensor, Δt: torch.Tensor, method: str = "heun"
+    ) -> torch.Tensor:
+        """
+        Take a step of size `Δt` from time `t`, with the explicit Euler method
+        (`method="euler"`) or Heun's method (`method="heun"`).
+        """
+        return _step(self, g_t, t, Δt, method)
 
     def step_back(
-        self, g_t: torch.Tensor, t: torch.Tensor, Δt: torch.Tensor
+        self, g_t: torch.Tensor, t: torch.Tensor, Δt: torch.Tensor, method: str = "heun"
     ) -> torch.Tensor:
-        return self.step(g_t, t, -Δt)
+        return self.step(g_t, t, -Δt, method)
 
     @torch.no_grad()
-    def sample(self, g_0: torch.Tensor, N_steps: int = 120) -> torch.Tensor:
+    def sample(
+        self, g_0: torch.Tensor, N_steps: int = 120, method: str = "heun"
+    ) -> torch.Tensor:
         """
         Integrate the flow from samples `g_0` at t = 0 to t = 1 in `N_steps`
-        steps.
+        steps, with the explicit Euler method (`method="euler"`) or Heun's
+        method (`method="heun"`), which costs two evaluations of the network per
+        step but is second-order accurate.
         """
-        self.eval()
-        Δt = torch.tensor([1.0 / N_steps], device=g_0.device, dtype=g_0.dtype)
-        g_t = g_0
-        for i in range(N_steps):
-            t = torch.tensor([i / N_steps], device=g_0.device, dtype=g_0.dtype)
-            g_t = self.step(g_t, t, Δt)
-        return g_t
+        return _sample(self, g_0, N_steps, method)
 
     def train_network(
         self, device, train_loader, optimizer, scheduler, ema, loss, show_progress=True
@@ -174,6 +191,7 @@ class FlowFieldGroup(nn.Module):
         bandwidths: torch.Tensor | list[float] | None = None,
         chunk_size: int = 128,
         N_steps: int = 120,
+        method: str = "heun",
     ) -> dict[str, float]:
         """
         Compute the Wasserstein-1 distance, precision, coverage, and squared MMD
@@ -193,8 +211,10 @@ class FlowFieldGroup(nn.Module):
             `chunk_size`: number of rows of the distance matrices computed at once,
             to limit memory usage. Defaults to 128.
             `N_steps`: number of integration steps. Defaults to 120.
+            `method`: integration method, `"euler"` or `"heun"`. Defaults to
+            `"heun"`.
         """
-        g_1_pred = self.sample(g_0, N_steps=N_steps)
+        g_1_pred = self.sample(g_0, N_steps=N_steps, method=method)
         return compare(
             self.G, g_1_pred, g_1, w, bandwidths=bandwidths, chunk_size=chunk_size
         )
@@ -246,34 +266,49 @@ class FlowFieldMatrixGroup(nn.Module):
             )
         )
 
-    def step(
-        self, R_t: torch.Tensor, t: torch.Tensor, Δt: torch.Tensor
-    ) -> torch.Tensor:
+    def velocity(self, R_t: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        """
+        Return the components w.r.t. the Lie algebra basis of the flow field at
+        `R_t` at the time `t`.
+        """
         t = t.view(1, 1).expand(R_t.shape[0], 1, 1)
-        # Components w.r.t. Lie algebra basis.
-        a_t = self(R_t, t)
-        basis = self.G.lie_algebra_basis
-        A_t = (a_t[..., None, None] * basis).sum(-3)
-        return self.G.L(R_t, self.G.exp(Δt * A_t))
+        return self(R_t, t)
+
+    def advance(
+        self, R_t: torch.Tensor, v: torch.Tensor, Δt: torch.Tensor
+    ) -> torch.Tensor:
+        """
+        Follow the exponential curve with generator components `v` from `R_t`
+        for a time `Δt`.
+        """
+        A = (v[..., None, None] * self.G.lie_algebra_basis).sum(-3)
+        return self.G.L(R_t, self.G.exp(Δt * A))
+
+    def step(
+        self, R_t: torch.Tensor, t: torch.Tensor, Δt: torch.Tensor, method: str = "heun"
+    ) -> torch.Tensor:
+        """
+        Take a step of size `Δt` from time `t`, with the explicit Euler method
+        (`method="euler"`) or Heun's method (`method="heun"`).
+        """
+        return _step(self, R_t, t, Δt, method)
 
     def step_back(
-        self, R_t: torch.Tensor, t: torch.Tensor, Δt: torch.Tensor
+        self, R_t: torch.Tensor, t: torch.Tensor, Δt: torch.Tensor, method: str = "heun"
     ) -> torch.Tensor:
-        return self.step(R_t, t, -Δt)
+        return self.step(R_t, t, -Δt, method)
 
     @torch.no_grad()
-    def sample(self, R_0: torch.Tensor, N_steps: int = 120) -> torch.Tensor:
+    def sample(
+        self, R_0: torch.Tensor, N_steps: int = 120, method: str = "heun"
+    ) -> torch.Tensor:
         """
         Integrate the flow from samples `R_0` at t = 0 to t = 1 in `N_steps`
-        steps.
+        steps, with the explicit Euler method (`method="euler"`) or Heun's
+        method (`method="heun"`), which costs two evaluations of the network per
+        step but is second-order accurate.
         """
-        self.eval()
-        Δt = torch.tensor([1.0 / N_steps], device=R_0.device, dtype=R_0.dtype)
-        R_t = R_0
-        for i in range(N_steps):
-            t = torch.tensor([i / N_steps], device=R_0.device, dtype=R_0.dtype)
-            R_t = self.step(R_t, t, Δt)
-        return R_t
+        return _sample(self, R_0, N_steps, method)
 
     def train_network(
         self, device, train_loader, optimizer, scheduler, ema, loss, show_progress=True
@@ -311,6 +346,7 @@ class FlowFieldMatrixGroup(nn.Module):
         bandwidths: torch.Tensor | list[float] | None = None,
         chunk_size: int = 128,
         N_steps: int = 120,
+        method: str = "heun",
     ) -> dict[str, float]:
         """
         Compute the Wasserstein-1 distance, precision, coverage, and squared MMD
@@ -330,8 +366,10 @@ class FlowFieldMatrixGroup(nn.Module):
             `chunk_size`: number of rows of the distance matrices computed at once,
             to limit memory usage. Defaults to 128.
             `N_steps`: number of integration steps. Defaults to 120.
+            `method`: integration method, `"euler"` or `"heun"`. Defaults to
+            `"heun"`.
         """
-        R_1_pred = self.sample(R_0, N_steps=N_steps)
+        R_1_pred = self.sample(R_0, N_steps=N_steps, method=method)
         return compare(
             self.G, R_1_pred, R_1, w, bandwidths=bandwidths, chunk_size=chunk_size
         )
@@ -380,31 +418,49 @@ class FlowFieldHomogeneousSpace(nn.Module):
     def forward(self, p_t: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         return self.network(torch.cat((p_t.flatten(-2, -1), t.flatten(-2, -1)), dim=-1))
 
-    def step(
-        self, p_t: torch.Tensor, t: torch.Tensor, Δt: torch.Tensor
-    ) -> torch.Tensor:
+    def velocity(self, p_t: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        """
+        Return the components w.r.t. the Lie algebra basis of the flow field at
+        `p_t` at the time `t`.
+        """
         t = t.view(1, 1).expand(len(p_t), 1, 1)
-        A_t = (self(p_t, t)[..., None, None] * self.h.G.lie_algebra_basis).sum(-3)
-        return self.h.act(self.h.G.exp(Δt * A_t), p_t)
+        return self(p_t, t)
+
+    def advance(
+        self, p_t: torch.Tensor, v: torch.Tensor, Δt: torch.Tensor
+    ) -> torch.Tensor:
+        """
+        Follow the exponential curve with generator components `v` from `p_t`
+        for a time `Δt`.
+        """
+        A = (v[..., None, None] * self.h.G.lie_algebra_basis).sum(-3)
+        return self.h.act(self.h.G.exp(Δt * A), p_t)
+
+    def step(
+        self, p_t: torch.Tensor, t: torch.Tensor, Δt: torch.Tensor, method: str = "heun"
+    ) -> torch.Tensor:
+        """
+        Take a step of size `Δt` from time `t`, with the explicit Euler method
+        (`method="euler"`) or Heun's method (`method="heun"`).
+        """
+        return _step(self, p_t, t, Δt, method)
 
     def step_back(
-        self, p_t: torch.Tensor, t: torch.Tensor, Δt: torch.Tensor
+        self, p_t: torch.Tensor, t: torch.Tensor, Δt: torch.Tensor, method: str = "heun"
     ) -> torch.Tensor:
-        return self.step(p_t, t, -Δt)
+        return self.step(p_t, t, -Δt, method)
 
     @torch.no_grad()
-    def sample(self, p_0: torch.Tensor, N_steps: int = 120) -> torch.Tensor:
+    def sample(
+        self, p_0: torch.Tensor, N_steps: int = 120, method: str = "heun"
+    ) -> torch.Tensor:
         """
         Integrate the flow from samples `p_0` at t = 0 to t = 1 in `N_steps`
-        steps.
+        steps, with the explicit Euler method (`method="euler"`) or Heun's
+        method (`method="heun"`), which costs two evaluations of the network per
+        step but is second-order accurate.
         """
-        self.eval()
-        Δt = torch.tensor([1.0 / N_steps], device=p_0.device, dtype=p_0.dtype)
-        p_t = p_0
-        for i in range(N_steps):
-            t = torch.tensor([i / N_steps], device=p_0.device, dtype=p_0.dtype)
-            p_t = self.step(p_t, t, Δt)
-        return p_t
+        return _sample(self, p_0, N_steps, method)
 
     def train_network(
         self, device, train_loader, optimizer, scheduler, ema, loss, show_progress=True
@@ -441,6 +497,7 @@ class FlowFieldHomogeneousSpace(nn.Module):
         bandwidths: torch.Tensor | list[float] | None = None,
         chunk_size: int = 128,
         N_steps: int = 120,
+        method: str = "heun",
     ) -> dict[str, float]:
         """
         Compute the Wasserstein-1 distance, precision, coverage, and squared MMD
@@ -460,8 +517,10 @@ class FlowFieldHomogeneousSpace(nn.Module):
             `chunk_size`: number of rows of the distance matrices computed at once,
             to limit memory usage. Defaults to 128.
             `N_steps`: number of integration steps. Defaults to 120.
+            `method`: integration method, `"euler"` or `"heun"`. Defaults to
+            `"heun"`.
         """
-        p_1_pred = self.sample(p_0, N_steps=N_steps)
+        p_1_pred = self.sample(p_0, N_steps=N_steps, method=method)
         return compare(
             self.h, p_1_pred, p_1, w, bandwidths=bandwidths, chunk_size=chunk_size
         )
@@ -515,30 +574,47 @@ class FlowFieldPowerGroup(nn.Module):
     def forward(self, g_t: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         return self.network(torch.cat((g_t, t), dim=-1))
 
-    def step(
-        self, g_t: torch.Tensor, t: torch.Tensor, Δt: torch.Tensor
-    ) -> torch.Tensor:
+    def velocity(self, g_t: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        """
+        Return the components of the flow field at `g_t` at the time `t`.
+        """
         t = t.view(1, 1, 1).expand(*g_t.shape[:-1], 1)
-        return self.G.L(g_t, self.G.exp(Δt * self(g_t, t)))
+        return self(g_t, t)
+
+    def advance(
+        self, g_t: torch.Tensor, v: torch.Tensor, Δt: torch.Tensor
+    ) -> torch.Tensor:
+        """
+        Follow the exponential curve with generator components `v` from `g_t`
+        for a time `Δt`.
+        """
+        return self.G.L(g_t, self.G.exp(Δt * v))
+
+    def step(
+        self, g_t: torch.Tensor, t: torch.Tensor, Δt: torch.Tensor, method: str = "heun"
+    ) -> torch.Tensor:
+        """
+        Take a step of size `Δt` from time `t`, with the explicit Euler method
+        (`method="euler"`) or Heun's method (`method="heun"`).
+        """
+        return _step(self, g_t, t, Δt, method)
 
     def step_back(
-        self, g_t: torch.Tensor, t: torch.Tensor, Δt: torch.Tensor
+        self, g_t: torch.Tensor, t: torch.Tensor, Δt: torch.Tensor, method: str = "heun"
     ) -> torch.Tensor:
-        return self.step(g_t, t, -Δt)
+        return self.step(g_t, t, -Δt, method)
 
     @torch.no_grad()
-    def sample(self, g_0: torch.Tensor, N_steps: int = 120) -> torch.Tensor:
+    def sample(
+        self, g_0: torch.Tensor, N_steps: int = 120, method: str = "heun"
+    ) -> torch.Tensor:
         """
         Integrate the flow from samples `g_0` at t = 0 to t = 1 in `N_steps`
-        steps.
+        steps, with the explicit Euler method (`method="euler"`) or Heun's
+        method (`method="heun"`), which costs two evaluations of the network per
+        step but is second-order accurate.
         """
-        self.eval()
-        Δt = torch.tensor([1.0 / N_steps], device=g_0.device, dtype=g_0.dtype)
-        g_t = g_0
-        for i in range(N_steps):
-            t = torch.tensor([i / N_steps], device=g_0.device, dtype=g_0.dtype)
-            g_t = self.step(g_t, t, Δt)
-        return g_t
+        return _sample(self, g_0, N_steps, method)
 
     def train_network(
         self, device, train_loader, optimizer, scheduler, ema, loss, show_progress=True
@@ -574,6 +650,7 @@ class FlowFieldPowerGroup(nn.Module):
         bandwidths: torch.Tensor | list[float] | None = None,
         chunk_size: int = 128,
         N_steps: int = 120,
+        method: str = "heun",
         permutation_invariant: bool = True,
     ) -> dict[str, float]:
         """
@@ -594,13 +671,15 @@ class FlowFieldPowerGroup(nn.Module):
             `chunk_size`: number of rows of the distance matrices computed at once,
             to limit memory usage. Defaults to 128.
             `N_steps`: number of integration steps. Defaults to 120.
+            `method`: integration method, `"euler"` or `"heun"`. Defaults to
+            `"heun"`.
             `permutation_invariant`: whether to treat samples as unordered sets
             of factors, by minimising the distance over all permutations of the
             factors. The transformer is equivariant under permutations of the
             factors, so it cannot reproduce a particular ordering. Defaults to
             True.
         """
-        g_1_pred = self.sample(g_0, N_steps=N_steps)
+        g_1_pred = self.sample(g_0, N_steps=N_steps, method=method)
         return compare(
             self.G,
             g_1_pred,
@@ -733,6 +812,31 @@ def ρ_c_normalised(
     A_1: torch.Tensor, A_2: torch.Tensor, w: torch.Tensor
 ) -> torch.Tensor:
     return (w**2 * (A_2 - A_1) ** 2).mean()
+
+
+def _step(model, x_t, t, Δt, method):
+    """
+    Step of the explicit Euler method, or of Heun's method: with `v_1` the
+    velocity at `x_t` and `v_2` the velocity at the Euler prediction, follow the
+    exponential curve with the average `(v_1 + v_2) / 2`. Since the exponential
+    curves are exact for constant generators, this is second-order accurate.
+    """
+    v = model.velocity(x_t, t)
+    if method == "heun":
+        v = (v + model.velocity(model.advance(x_t, v, Δt), t + Δt)) / 2
+    elif method != "euler":
+        raise ValueError(f"Unknown integration method {method}!")
+    return model.advance(x_t, v, Δt)
+
+
+def _sample(model, x_0, N_steps, method):
+    model.eval()
+    Δt = torch.tensor([1.0 / N_steps], device=x_0.device, dtype=x_0.dtype)
+    x_t = x_0
+    for i in range(N_steps):
+        t = torch.tensor([i / N_steps], device=x_0.device, dtype=x_0.dtype)
+        x_t = _step(model, x_t, t, Δt, method)
+    return x_t
 
 
 def _train_epoch(
