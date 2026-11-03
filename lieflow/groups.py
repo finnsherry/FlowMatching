@@ -92,8 +92,7 @@ class Group(ABC):
         permutation_invariant: bool = False,
     ) -> torch.Tensor:
         """
-        Compute the matrix of logarithmic distances `D[i, j] = ρ(g_1[i], g_2[j])`
-        with `ρ(g, h) = ||w * log(g^{-1} h)||`.
+        Compute the pairwise logarithmic distances between `g_1` and `g_2`.
 
         Args:
             `g_1`: samples of shape [N, ..., dim].
@@ -106,9 +105,6 @@ class Group(ABC):
             i.e. of shape [N, m, dim]. If True, the distance is minimised over
             all permutations of the m factors, so that samples are treated as
             unordered sets. Defaults to False.
-
-        For samples in a power of the group, the distance is the product
-        distance `ρ(g, h) = (sum_k ρ(g_k, h_k)^2)^(1/2)`.
         """
         if permutation_invariant:
             return self._permutation_invariant_distance_matrix(g_1, g_2, w, chunk_size)
@@ -121,7 +117,6 @@ class Group(ABC):
         return D
 
     def _permutation_invariant_distance_matrix(self, g_1, g_2, w, chunk_size):
-
         D_squared = []
         for i in range(0, len(g_1), chunk_size):
             A = self.log(self.L_inv(g_1[i:i + chunk_size, None, :, None], g_2[None, :, None]))
@@ -631,9 +626,7 @@ class MatrixGroup(ABC):
         chunk_size: int = 128,
     ) -> torch.Tensor:
         """
-        Compute the matrix of logarithmic distances `D[i, j] = ρ(R_1[i], R_2[j])`
-        with `ρ(R, S) = ||w * log(R^{-1} S)||`, where the norm is taken of the
-        components with respect to the Lie algebra basis.
+        Compute the pairwise logarithmic distances between `R_1` and `R_2`.
 
         Args:
             `R_1`: samples of shape [N, n, n].
@@ -719,10 +712,12 @@ class SO3(MatrixGroup):
 
     def exp(self, A, ε_stab=0.001):
         """
-        Rodrigues formula: `exp(A) = I + sin(θ) / θ A + (1 - cos(θ)) / θ^2 A^2`,
-        with `θ` the norm of the components of `A`. Writing the coefficients as
-        `sinc(θ)` and `sinc(θ / 2)^2 / 2` makes this well-defined and accurate
-        for `θ -> 0`.
+        Lie group exponential of `A`, i.e. `A` in Lie algebra such that
+        `exp(A) = R`.
+
+        While PyTorch has a built in matrix exp, it can still be more
+        efficient and accurate to use a custom formula. For SO(3), it is
+        well-known (Rodrigues' rotation formula) and not so difficult.
         """
         A_vec = self.lie_algebra_components(A)
         θ = (A_vec**2).sum(-1).clamp_min(1e-12).sqrt()[..., None, None]
@@ -839,10 +834,11 @@ class SE3(MatrixGroup):
 
     def exp(self, A, ε_stab=0.0001):
         """
-        Lie group exponential of `A`. Writing `A = [[ω, v], [0, 0]]`, we have
-        `exp(A) = [[exp(ω), V v], [0, 1]]`, where `exp(ω) = I + F_1 ω + F_2 ω^2`
-        is the Rodrigues formula, and `V = I + F_2 ω + F_3 ω^2`, with
-        `F_3(θ^2) = (θ - sin(θ)) / θ^3`.
+        Lie group exponential of `A`. 
+
+        While PyTorch has a built in matrix exp, it can still be more
+        efficient and accurate to use a custom formula. For SE(3), we
+        can use Rodrigues' rotation formula.
         """
         ω, v = A[..., :3, :3], A[..., :3, 3:]
         θ_squared = (self.so3.lie_algebra_components(ω) ** 2).sum(-1)[..., None, None]
@@ -930,9 +926,9 @@ class SOplus12(MatrixGroup):
         `|1 - c| < ε_stab`, so that we need not classify `A`.
 
         If `A` is timelike and `θ` is within `ε_π` of `π`, `f` is ill-conditioned
-        and blows up as `sin(θ)` vanishes. We then instead extract the axis `k` of `Â`, normalised such that
-        `k^T η k = 1`, from `(Λ + Λ^{-1}) / 2 = I + (1 - c) Â^2` using
-        `Â^2 + I = k k^T η`.
+        and blows up as `sin(θ)` vanishes. We then instead extract the axis `k` of `Â`,
+        normalised such that `k^T η k = 1`, from `(Λ + Λ^{-1}) / 2 = I + (1 - c) Â^2`
+        using `Â^2 + I = k k^T η`.
         """
         η = self.η.to(Λ.dtype)
         Λ_inv = η @ Λ.transpose(-2, -1) @ η
@@ -971,11 +967,11 @@ class SOplus12(MatrixGroup):
 
     def exp(self, A, ε_stab=0.0001):
         """
-        Generalised Rodrigues formula: `exp(A) = I + F_1(s^2) A + F_2(s^2) A^2`,
-        where `s^2 = k^T η k` for components `k` of `A`, and `F_1(s^2) = sin(s) / s`
-        and `F_2(s^2) = (1 - cos(s)) / s^2` if `s^2 > 0`, and the hyperbolic
-        analogues if `s^2 < 0`. Since `F_1` and `F_2` are analytic in `s^2`, we
-        use their Taylor expansions if `|s^2| < ε_stab`.
+        Lie group exponential of `A`.
+
+        While PyTorch has a built in matrix exp, it can still be more
+        efficient and accurate to use a custom formula. For SO^+(1, 2), 
+        we can use a generalisation of Rodrigues' rotation formula.
         """
         A_vec = self.lie_algebra_components(A)
         s_squared = (A_vec @ self.η.to(A.dtype) * A_vec).sum(-1)[..., None, None]
@@ -1127,10 +1123,11 @@ class SEplus12(MatrixGroup):
 
     def exp(self, A, ε_stab=0.0001):
         """
-        Lie group exponential of `A`. Writing `A = [[ω, v], [0, 0]]`, we have
-        `exp(A) = [[exp(ω), V v], [0, 1]]`, where `exp(ω) = I + F_1 ω + F_2 ω^2`
-        is the generalised Rodrigues formula of `SOplus12.exp`, and
-        `V = I + F_2 ω + F_3 ω^2`, with `F_3(s^2) = (s - sin(s)) / s^3`.
+        Lie group exponential of `A`.
+
+        While PyTorch has a built in matrix exp, it can still be more
+        efficient and accurate to use a custom formula. For SE^+(1, 2),
+        we can use a generalisation of Rodrigues' rotation formula.
         """
         ω, v = A[..., :3, :3], A[..., :3, 3:]
         k = self.soplus12.lie_algebra_components(ω)
