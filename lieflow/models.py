@@ -887,15 +887,29 @@ class DataGenerator:
     Draws new pairs (g_0, g_1) for every batch. The samples are drawn for
     `batches_per_block` batches at once, which is much faster for small batches:
     `blocks` yields these blocks, iterating yields single batches.
+
+    Optionally, `coupling`, e.g. an `OTCoupling`, re-pairs the targets to the
+    sources within each batch; by default, sources and targets are independent.
     """
     def __init__(
-        self, generate_g_0, generate_g_1, batch_size, batches_per_epoch, batches_per_block=16
+        self,
+        generate_g_0,
+        generate_g_1,
+        batch_size,
+        batches_per_epoch,
+        batches_per_block=16,
+        coupling=None,
     ):
         self.generate_g_0 = generate_g_0
         self.generate_g_1 = generate_g_1
         self.batch_size = batch_size
         self.batches_per_epoch = batches_per_epoch
         self.batches_per_block = batches_per_block
+        self.coupling = coupling
+        if coupling is not None and batch_size % coupling.block_size != 0:
+            raise ValueError(
+                f"The batch size {batch_size} is not a multiple of the coupling's block size {coupling.block_size}!"
+            )
 
     def __len__(self):
         return self.batches_per_epoch
@@ -904,8 +918,86 @@ class DataGenerator:
         """Yield blocks `(g_0, g_1, batch_size)` of several batches."""
         for start in range(0, self.batches_per_epoch, self.batches_per_block):
             N = min(self.batches_per_block, self.batches_per_epoch - start) * self.batch_size
-            yield self.generate_g_0(N), self.generate_g_1(N), self.batch_size
+            g_0, g_1 = self.generate_g_0(N), self.generate_g_1(N)
+            if self.coupling is not None:
+                # The coupling's blocks divide the batches, so this pairs within batches.
+                g_1 = self.coupling(g_0, g_1)
+            yield g_0, g_1, self.batch_size
 
     def __iter__(self):
         for g_0, g_1, batch_size in self.blocks():
             yield from zip(g_0.split(batch_size), g_1.split(batch_size))
+
+
+class OTCoupling:
+    """
+    Mini-batch optimal transport coupling.[1, 2] Within consecutive blocks of
+    `block_size` samples, the targets are re-paired to the sources according to
+    the entropic optimal transport plan for the cost `G.cost_matrices`, the
+    squared logarithmic distance, which is the kinetic energy of the
+    exponential curve from source to target: the partner of each source is
+    drawn from its row of the plan. This makes the exponential curves cross
+    less, so that the flow field is easier to learn and to integrate.
+
+    Args:
+        `G`: group or homogeneous space with a method `cost_matrices`.
+      Optional:
+        `w`: weights of the components of the generator, as in
+          `LogarithmicDistance`. Defaults to all ones.
+        `block_size`: number of samples that are coupled together. Defaults to
+          128.
+        `reg`: entropic regularisation, relative to the mean cost of the block.
+          Defaults to 0.05.
+        `iters`: number of Sinkhorn iterations. Defaults to 50.
+
+    References:
+        [1]: A. Tong, K. Fatras, N. Malkin, G. Huguet, Y. Zhang, J. Rector-Brooks,
+          G. Wolf, and Y. Bengio. "Improving and Generalizing Flow-Based
+          Generative Models with Minibatch Optimal Transport." Transactions on
+          Machine Learning Research (2024). DOI:10.48550/arXiv.2302.00482.
+        [2]: A.-A. Pooladian, H. Ben-Hamu, C. Domingo-Enrich, B. Amos, Y. Lipman,
+          and R.T.Q. Chen. "Multisample Flow Matching: Straightening Flows with
+          Minibatch Couplings." International Conference on Machine Learning
+          (2023). DOI:10.48550/arXiv.2304.14772.
+    """
+
+    def __init__(self, G, w=None, block_size=128, reg=0.05, iters=50):
+        self.G = G
+        self.w = w
+        self.block_size = block_size
+        self.reg = reg
+        self.iters = iters
+
+    @torch.no_grad()
+    def __call__(self, g_0: torch.Tensor, g_1: torch.Tensor) -> torch.Tensor:
+        """Return the targets `g_1` re-paired to the sources `g_0`."""
+        B, b = len(g_0) // self.block_size, self.block_size
+        C = self.G.cost_matrices(g_0.view(B, b, *g_0.shape[1:]), g_1.view(B, b, *g_1.shape[1:]), self.w)
+        P = _sinkhorn(C, self.reg, self.iters)
+        j = torch.multinomial(P.flatten(0, 1), 1).view(B, b)
+        return g_1[(j + b * torch.arange(B, device=j.device)[:, None]).flatten()]
+
+
+def _sinkhorn(C, reg, iters):
+    """
+    Entropic optimal transport plans with uniform marginals for the cost
+    matrices `C` [B, b, b], up to normalisation of the rows. The cost is
+    divided by `reg` times its mean, and shifted by its row minima, which the
+    scaling absorbs; if this still underflows, fall back to the log domain.
+    """
+    C = torch.nan_to_num(C, nan=0.0, posinf=0.0)
+    E = (C - C.amin(-1, keepdim=True)) / (reg * C.mean((-2, -1), keepdim=True).clamp_min(1e-12))
+    K = torch.exp(-E)
+    v = torch.ones(*K.shape[:-2], K.shape[-1], 1, dtype=K.dtype, device=K.device)
+    for _ in range(iters):
+        u = 1.0 / (K @ v)
+        v = 1.0 / (K.transpose(-1, -2) @ u)
+    P = u * K * v.transpose(-1, -2)
+    if torch.isfinite(P).all() and (P.sum(-1) > 0).all():
+        return P
+    f = torch.zeros(K.shape[:-1], dtype=K.dtype, device=K.device)
+    g = torch.zeros_like(f)
+    for _ in range(iters):
+        f = -torch.logsumexp(g[..., None, :] - E, -1)
+        g = -torch.logsumexp(f[..., :, None] - E, -2)
+    return torch.softmax(f[..., :, None] + g[..., None, :] - E, -1)

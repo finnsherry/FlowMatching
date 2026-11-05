@@ -116,6 +116,25 @@ class Group(ABC):
             D[i:i + chunk_size] = A.flatten(start_dim=2).norm(dim=-1)
         return D
 
+    @torch.no_grad()
+    def cost_matrices(
+        self, g_1: torch.Tensor, g_2: torch.Tensor, w: torch.Tensor | None = None
+    ) -> torch.Tensor:
+        """
+        Compute the squared logarithmic distances between all pairs within
+        blocks, `C[k, i, j] = ρ(g_1[k, i], g_2[k, j])^2`, as the cost of a
+        mini-batch optimal transport coupling.
+
+        Args:
+            `g_1`: samples of shape [B, b, dim].
+            `g_2`: samples of shape [B, b, dim].
+          Optional:
+            `w`: metric parameters. Defaults to all ones.
+        """
+        return torch.stack(
+            [self.distance_matrix(a, b, w, chunk_size=len(a)) ** 2 for a, b in zip(g_1, g_2)]
+        )
+
     def _permutation_invariant_distance_matrix(self, g_1, g_2, w, chunk_size):
         D_squared = []
         for i in range(0, len(g_1), chunk_size):
@@ -163,6 +182,18 @@ class Rn(Group):
         Lie group exponential of `A`, i.e. `A`.
         """
         return A.clone()
+
+    @torch.no_grad()
+    def cost_matrices(self, g_1, g_2, w=None):
+        """
+        Compute the squared (weighted) Euclidean distances between all pairs
+        within blocks, `C[k, i, j] = ||w * (g_2[k, j] - g_1[k, i])||^2`. Samples
+        in a power of the group, of shape [B, b, m, dim], use the product
+        distance.
+        """
+        if w is not None:
+            g_1, g_2 = w * g_1, w * g_2
+        return torch.cdist(g_1.flatten(2), g_2.flatten(2), compute_mode="donot_use_mm_for_euclid_dist") ** 2
 
     def __repr__(self):
         return f"R^{self.dim}"
@@ -645,6 +676,26 @@ class MatrixGroup(ABC):
             D[i:i + chunk_size] = a.norm(dim=-1)
         return D
 
+    @torch.no_grad()
+    def cost_matrices(
+        self, R_1: torch.Tensor, R_2: torch.Tensor, w: torch.Tensor | None = None
+    ) -> torch.Tensor:
+        """
+        Compute the squared logarithmic distances between all pairs within
+        blocks, `C[k, i, j] = ρ(R_1[k, i], R_2[k, j])^2`, as the cost of a
+        mini-batch optimal transport coupling.
+
+        Args:
+            `R_1`: samples of shape [B, b, n, n].
+            `R_2`: samples of shape [B, b, n, n].
+          Optional:
+            `w`: weights of the components of the generator, as in
+            `LogarithmicDistance`. Defaults to all ones.
+        """
+        return torch.stack(
+            [self.distance_matrix(a, b, w, chunk_size=len(a)) ** 2 for a, b in zip(R_1, R_2)]
+        )
+
 
 class SO3(MatrixGroup):
     """
@@ -736,6 +787,21 @@ class SO3(MatrixGroup):
         return torch.cat(
             (A[..., 2, 1, None], A[..., 0, 2, None], A[..., 1, 0, None]), dim=-1
         )
+
+    @torch.no_grad()
+    def cost_matrices(self, R_1, R_2, w=None):
+        """
+        Compute the squared logarithmic distances between all pairs within
+        blocks, `C[k, i, j] = ρ(R_1[k, i], R_2[k, j])^2`. If the weights are
+        uniform, `ρ(R, S) = w θ` with the rotation angle `θ` of `R^T S`, and
+        `cos(θ) = (tr(R^T S) - 1) / 2`, where `tr(R^T S)` is the inner product
+        of `R` and `S` as vectors in R^9. Hence no logarithms are needed.
+        """
+        if w is not None and not bool((w == w[0]).all()):
+            return super().cost_matrices(R_1, R_2, w)
+        traces = R_1.flatten(-2) @ R_2.flatten(-2).transpose(-1, -2)
+        C = torch.arccos(((traces - 1) / 2).clamp(-1, 1)) ** 2
+        return C if w is None else w[0] ** 2 * C
 
     def __repr__(self):
         return "SO(3)"
@@ -1216,6 +1282,26 @@ class HomogeneousSpace(ABC):
             D[i:i + chunk_size] = a.norm(dim=-1)
         return D
 
+    @torch.no_grad()
+    def cost_matrices(
+        self, p_1: torch.Tensor, p_2: torch.Tensor, w: torch.Tensor | None = None
+    ) -> torch.Tensor:
+        """
+        Compute the squared logarithmic distances between all pairs within
+        blocks, `C[k, i, j] = ρ(p_1[k, i], p_2[k, j])^2`, as the cost of a
+        mini-batch optimal transport coupling.
+
+        Args:
+            `p_1`: samples of shape [B, b, ...].
+            `p_2`: samples of shape [B, b, ...].
+          Optional:
+            `w`: weights of the components of the generator, as in
+            `LogarithmicDistance`. Defaults to all ones.
+        """
+        return torch.stack(
+            [self.distance_matrix(a, b, w, chunk_size=len(a)) ** 2 for a, b in zip(p_1, p_2)]
+        )
+
 
 class M3(HomogeneousSpace):
     """
@@ -1320,6 +1406,66 @@ class M3(HomogeneousSpace):
             (ω * ~use_mav[..., None] + ω_mav * use_mav[..., None])
             * ~parallel[..., None],
         )
+
+    @torch.no_grad()
+    def cost_matrices(self, p_1, p_2, w=None, ε_stab=0.001):
+        """
+        Compute the squared logarithmic distances between all pairs within
+        blocks, `C[k, i, j] = ρ(p_1[k, i], p_2[k, j])^2`.
+
+        For the `mav` generator with weights `w_t` for all translational and
+        `w_r` for all rotational components, this only needs inner products of
+        the samples, i.e. matrix multiplications. With `cos(θ) = n_1 . n_2`,
+        `k = n_1 x n_2 / sin(θ)`, `h = θ / 2 cot(θ / 2)`, `Δx = x_2 - x_1`, and
+        `x_m = (x_1 + x_2) / 2`, the generator has rotational part `θ k` and
+        translational part `(k . Δx) k + h (Δx - (k . Δx) k) - θ k x x_m`, so
+          `ρ^2 = w_r^2 θ^2 + w_t^2 ((k . Δx)^2 + h^2 (|Δx|^2 - (k . Δx)^2)
+                 + θ^2 (|x_m|^2 - (k . x_m)^2) - 2 h θ k . (x_1 x x_2))`,
+        where `sin(θ) k . x_2 = n_1 . (n_2 x x_2)`,
+        `sin(θ) k . x_1 = (x_1 x n_1) . n_2`, and
+        `sin(θ) k . (x_1 x x_2) = (n_1 . x_1) (n_2 . x_2) - (n_1 . x_2) (x_1 . n_2)`.
+        Near `θ = 0`, `sin(θ)` loses precision, so a few nearly parallel pairs
+        have a slightly inaccurate cost; it is meant for couplings, use
+        `distance_matrix` for metrics.
+        """
+        w_t, w_r = (1.0, 1.0) if w is None else (w[0], w[3])
+        if self.generator != "mav" or (
+            w is not None and not bool((w[:3] == w_t).all() and (w[3:] == w_r).all())
+        ):
+            return super().cost_matrices(p_1, p_2, w)
+        x_1, n_1 = self.get_position_orientation(p_1)
+        x_2, n_2 = self.get_position_orientation(p_2)
+        inner = lambda a, b: a @ b.transpose(-1, -2)
+
+        cosθ = inner(n_1, n_2).clamp(-1.0, 1.0)
+        sinθ = (1.0 - cosθ**2).clamp_min(0.0).sqrt()
+        θ = torch.atan2(sinθ, cosθ)
+        parallel = θ < ε_stab
+        sinθ = torch.where(parallel, 1.0, sinθ)
+        k_x_2 = inner(n_1, cross_product(n_2, x_2)) / sinθ
+        k_x_1 = inner(cross_product(x_1, n_1), n_2) / sinθ
+        k_x_1_x_2 = (
+            (n_1 * x_1).sum(-1)[..., :, None] * (n_2 * x_2).sum(-1)[..., None, :]
+            - inner(n_1, x_2) * inner(x_1, n_2)
+        ) / sinθ
+        k_Δx = k_x_2 - k_x_1
+        k_x_m = (k_x_1 + k_x_2) / 2.0
+
+        x_1_x_2 = inner(x_1, x_2)
+        x_1_squared = (x_1**2).sum(-1)[..., :, None]
+        x_2_squared = (x_2**2).sum(-1)[..., None, :]
+        Δx_squared = x_1_squared + x_2_squared - 2.0 * x_1_x_2
+        x_m_squared = (x_1_squared + x_2_squared + 2.0 * x_1_x_2) / 4.0
+
+        h = torch.where(parallel, 1.0, (θ / 2.0) * _cotan(torch.where(parallel, 1.0, θ / 2.0)))
+        v_squared = (
+            k_Δx**2
+            + h**2 * (Δx_squared - k_Δx**2)
+            + θ**2 * (x_m_squared - k_x_m**2)
+            - 2.0 * h * θ * k_x_1_x_2
+        )
+        C = torch.where(parallel, w_t**2 * Δx_squared, w_t**2 * v_squared + w_r**2 * θ**2)
+        return C.clamp_min(0.0)
 
     def act(self, g, p):
         return g @ p
@@ -1478,6 +1624,87 @@ class P3(HomogeneousSpace):
             -hyperbolic_cross_product(k, c) + v,
             ω,
         )
+
+    @torch.no_grad()
+    def cost_matrices(self, p_1, p_2, w=None, ε_stab=1e-2):
+        """
+        Compute the squared logarithmic distances between all pairs within
+        blocks, `C[k, i, j] = ρ(p_1[k, i], p_2[k, j])^2`.
+
+        For the `spacelike` generator with weights `w_t` for all translational
+        and `w_r` for all Lorentz components, this only needs inner products of
+        the samples, i.e. matrix multiplications. Write `u = n_1 x n_2` for the
+        Euclidean cross product, so that the hyperbolic cross product is
+        `n_1 x_η n_2 = η u`, and `s^2 = -u^T η u`, `w = asinh(s)`,
+        `α = w / s`, `β = w / 2 coth(w / 2) - 1`, `γ = β / s^2`,
+        `Δx = x_2 - x_1`, `x_m = (x_1 + x_2) / 2`, `p = u . Δx`. Then the
+        generator has Lorentz part `α η u` and translational part
+        `v = (1 + β) Δx - α Q + γ p η u` with `Q = u x η x_m`. Since
+        `η = diag(1, -1, -1)` is a rotation, `η a . η b = a . b` and
+        `η (a x b) = η a x η b`, so all inner products of `Δx`, `Q`, and `η u`
+        reduce to inner products of the samples by
+        `(a x b) . (c x d) = (a . c) (b . d) - (a . d) (b . c)`, e.g.
+        `Q . η u = -2 u_t u . (e_t x η x_m)` using `u x η u = 2 u_t u x e_t`.
+        Expanding the squares loses relative precision for very close pairs
+        (absolute error ~1e-3 in single precision); it is meant for couplings,
+        use `distance_matrix` for metrics.
+        """
+        w_t, w_r = (1.0, 1.0) if w is None else (w[0], w[3])
+        if self.generator != "spacelike" or (
+            w is not None and not bool((w[:3] == w_t).all() and (w[3:] == w_r).all())
+        ):
+            return super().cost_matrices(p_1, p_2, w)
+        x_1, n_1 = self.get_event_velocity(p_1)
+        x_2, n_2 = self.get_event_velocity(p_2)
+        η = self.η.diagonal().to(x_1.dtype)
+        e_t = torch.zeros_like(n_2)
+        e_t[..., 0] = 1.0
+        inner = lambda a, b: a @ b.transpose(-1, -2)
+        inner_1 = lambda a, b: (a * b).sum(-1)[..., :, None]  # of sample 1, along rows
+        inner_2 = lambda a, b: (a * b).sum(-1)[..., None, :]  # of sample 2, along columns
+        # u . y_1 = n_2 . (y_1 x n_1), u . y_2 = n_1 . (n_2 x y_2)
+        u_dot_1 = lambda y_1: inner(cross_product(y_1, n_1), n_2)
+        u_dot_2 = lambda y_2: inner(n_1, cross_product(n_2, y_2))
+
+        u_squared = inner_1(n_1, n_1) * inner_2(n_2, n_2) - inner(n_1, n_2) ** 2
+        u_t = u_dot_2(e_t)
+        s_squared = (u_squared - 2.0 * u_t**2).clamp_min(0.0)
+        p = u_dot_2(x_2) - u_dot_1(x_1)
+        u_ηx_m = (u_dot_1(η * x_1) + u_dot_2(η * x_2)) / 2.0
+
+        x_1_x_2 = inner(x_1, x_2)
+        x_1_squared, x_2_squared = inner_1(x_1, x_1), inner_2(x_2, x_2)
+        Δx_squared = x_1_squared + x_2_squared - 2.0 * x_1_x_2
+        x_m_squared = (x_1_squared + x_2_squared + 2.0 * x_1_x_2) / 4.0
+        n_1_ηx_m = (inner_1(n_1, η * x_1) + inner(n_1, η * x_2)) / 2.0
+        n_2_ηx_m = (inner(η * x_1, n_2) + inner_2(n_2, η * x_2)) / 2.0
+        n_1_Δx = inner(n_1, x_2) - inner_1(n_1, x_1)
+        n_2_Δx = inner_2(n_2, x_2) - inner(x_1, n_2)
+
+        Q_Q = u_squared * x_m_squared - u_ηx_m**2
+        Δx_Q = n_1_ηx_m * n_2_Δx - n_1_Δx * n_2_ηx_m
+        Δx_ηu = u_dot_2(η * x_2) - u_dot_1(η * x_1)
+        Q_ηu = -2.0 * u_t * (inner_1(n_1, e_t) * n_2_ηx_m - n_1_ηx_m * inner_2(n_2, e_t))
+
+        # Series for small s, as in `get_generator`.
+        s = s_squared.sqrt()
+        small = s < ε_stab
+        w_ = torch.asinh(s)
+        w_safe = torch.where(small, 1.0, w_)
+        α = torch.where(small, 1.0 - s_squared / 6.0 + 3.0 * s_squared**2 / 40.0, w_ / torch.where(small, 1.0, s))
+        β = torch.where(small, w_**2 / 12.0 - w_**4 / 720.0, (w_safe / 2.0) / torch.tanh(w_safe / 2.0) - 1.0)
+        γ = torch.where(small, (1.0 / 12.0 - w_**2 / 720.0) * α**2, β / torch.where(small, 1.0, s_squared))
+
+        a, b, c = 1.0 + β, -α, γ * p
+        v_squared = (
+            a**2 * Δx_squared
+            + b**2 * Q_Q
+            + c**2 * u_squared
+            + 2.0 * a * b * Δx_Q
+            + 2.0 * a * c * Δx_ηu
+            + 2.0 * b * c * Q_ηu
+        )
+        return (w_t**2 * v_squared + w_r**2 * α**2 * u_squared).clamp_min(0.0)
 
     def act(self, g, p):
         return g @ p
