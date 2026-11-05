@@ -28,7 +28,7 @@ import torch
 from torch import nn
 from tqdm.auto import tqdm
 
-from lieflow.groups import Group, HomogeneousSpace, MatrixGroup, PowerGroup
+from lieflow.groups import Group, HomogeneousSpace, MatrixGroup, PowerSpace
 from lieflow.metrics import compare
 
 
@@ -38,13 +38,13 @@ class FlowField(nn.Module):
     homogeneous space, such as position-orientation space `M3` with mav
     exponential curves.[3] The model only uses the exponential curves of the
     space, through its methods `generator_components` and `flow`. The network
-    is an MLP on the flattened points, or, if `space` is a `PowerGroup`, a
-    transformer with one token per factor, which is equivariant under
+    is an MLP on the flattened points, or, if `space` is a `PowerSpace`, a
+    transformer with one token per flattened factor, which is equivariant under
     permutations of the factors.
 
     Args:
-        `space`: group of type `Group` or `MatrixGroup`, or a
-          `HomogeneousSpace`.
+        `space`: group of type `Group` or `MatrixGroup`, a `HomogeneousSpace`,
+          or a `PowerSpace` of one of these.
       Optional:
         `L`: depth of the network: number of hidden layers of the MLP, which
           are the same `ResidualBlock`, or number of encoder blocks of the
@@ -72,7 +72,7 @@ class FlowField(nn.Module):
 
     def __init__(
         self,
-        space: Group | MatrixGroup | HomogeneousSpace,
+        space: Group | MatrixGroup | HomogeneousSpace | PowerSpace,
         L: int = 2,
         H: int = 64,
         embed_dim: int = 256,
@@ -81,9 +81,11 @@ class FlowField(nn.Module):
     ):
         super().__init__()
         self.space = space
-        self.tokens = isinstance(space, PowerGroup)
+        self.tokens = isinstance(space, PowerSpace)
         if self.tokens:
-            self.network = _transformer(space.G.dim + 1, space.G.dim, embed_dim, num_heads, expansion, L)
+            self.network = _transformer(
+                space.G.point_size + 1, space.G.generator_dim, embed_dim, num_heads, expansion, L
+            )
         else:
             self.network = _mlp(space.point_size + 1, space.generator_dim, H, L)
 
@@ -93,6 +95,7 @@ class FlowField(nn.Module):
         [N, ...] at the times `t`, with one time per point.
         """
         if self.tokens:
+            x_t = x_t.flatten(start_dim=2)
             t = t.reshape(len(t), 1, 1).expand(*x_t.shape[:-1], 1)
             return self.network(torch.cat((x_t, t), dim=-1))
         return self.network(torch.cat((x_t.flatten(start_dim=1), t.reshape(len(t), 1)), dim=-1))

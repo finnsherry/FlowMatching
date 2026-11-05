@@ -16,6 +16,8 @@ There are three abstract parent classes:
   by a `MatrixGroup`. Requires implementing the action of the group on the
   homogeneous space and the computation of generators in the Lie algebra
   connecting pairs of points in the homogeneous space.
+Additionally, `PowerSpace(G, m)` is the power G^m of any of these spaces, by
+default with unordered factors.
 Also provides example implementations of
   1. `Rn(n)` <: `Group`: n-dimensional translation group R^n.
   2. `SE2()` <: `Group`: special Euclidean group of roto-translations on
@@ -24,18 +26,16 @@ Also provides example implementations of
   4. `TSn(n)` <: `Group`: translation-scaling group on R^n.
   5. `RmbyTSn(rm, tsn)` <: `Group`: direct product of R^m and TS(n).
   6. `Aff2()` <: `Group`: group of affine transformations on R^2.
-  7. `PowerGroup(G, m)` <: `Group`: power G^m of a `Group`, by default with
-  unordered factors.
-  8. `SO3()` <: `MatrixGroup`: special orthogonal group of rotations on R^3.
-  9. `SE3()` <: `MatrixGroup`: special Euclidean group of roto-translations on
+  7. `SO3()` <: `MatrixGroup`: special orthogonal group of rotations on R^3.
+  8. `SE3()` <: `MatrixGroup`: special Euclidean group of roto-translations on
   R^3.
-  10. `SOplus12()` <: `MatrixGroup`: proper orthochronous special orthogonal group
+  9. `SOplus12()` <: `MatrixGroup`: proper orthochronous special orthogonal group
   of Lorentz transformations on R^3.
-  11. `SEplus12()` <: `MatrixGroup`: proper orthochronous special Euclidean group
+  10. `SEplus12()` <: `MatrixGroup`: proper orthochronous special Euclidean group
   of Poincare transformations on R^3.
-  12. `M3()` <: `HomogeneousSpace`: position-orientation space R^3 x S^2, which
+  11. `M3()` <: `HomogeneousSpace`: position-orientation space R^3 x S^2, which
   is an SE(3)-homogeneous space.
-  13. `P3()` <: `HomogeneousSpace`: event-velocity space R^3 x H^2, which
+  12. `P3()` <: `HomogeneousSpace`: event-velocity space R^3 x H^2, which
   is an SE^+(1, 2)-homogeneous space.
 """
 
@@ -619,90 +619,6 @@ class Aff2(Group):
 
     def __repr__(self):
         return "Aff^+(2)"
-
-
-class PowerGroup(Group):
-    """
-    Power G^m of a group `G` of type `Group`, whose elements are `m` elements
-    of `G`, of shape [..., m, G.dim]; all operations act on every factor.
-
-    Args:
-        `G`: instance of the group of the factors.
-        `m`: number of factors.
-      Optional:
-        `permutation_invariant`: whether the factors are unordered, so that the
-          distance between two elements is minimised over all permutations of
-          the factors. Defaults to True.
-    """
-
-    def __init__(self, G: Group, m: int, permutation_invariant: bool = True):
-        super().__init__(dim=m * G.dim)
-        self.G = G
-        self.m = m
-        self.permutation_invariant = permutation_invariant
-
-    def L(self, g_1, g_2):
-        """
-        Left multiplication of `g_2` by `g_1`, factorwise.
-        """
-        return self.G.L(g_1, g_2)
-
-    def L_inv(self, g_1, g_2):
-        """
-        Left multiplication of `g_2` by `g_1^-1`, factorwise.
-        """
-        return self.G.L_inv(g_1, g_2)
-
-    def log(self, g):
-        """
-        Lie group logarithm of `g`, factorwise.
-        """
-        return self.G.log(g)
-
-    def exp(self, A):
-        """
-        Lie group exponential of `A`, factorwise.
-        """
-        return self.G.exp(A)
-
-    @torch.no_grad()
-    def distance_matrix(
-        self,
-        g_1: torch.Tensor,
-        g_2: torch.Tensor,
-        w: torch.Tensor | None = None,
-        chunk_size: int = 128,
-    ) -> torch.Tensor:
-        """
-        Compute the matrix of logarithmic distances `D[i, j] = ρ(g_1[i], g_2[j])`,
-        with the product distance `ρ^2 = sum_k ρ_G(g_1[i, k], g_2[j, k])^2`. If
-        the space is `permutation_invariant`, it is minimised over all
-        permutations of the factors of `g_2[j]`.
-        """
-        if not self.permutation_invariant:
-            return super().distance_matrix(g_1, g_2, w, chunk_size)
-        D_squared = []
-        for i in range(0, len(g_1), chunk_size):
-            A = self.generator_components(g_1[i:i + chunk_size, None, :, None], g_2[None, :, None])
-            if w is not None:
-                A = w * A
-            C = (A**2).sum(-1).cpu().numpy()
-            for c in C.reshape(-1, *C.shape[2:]):
-                rows, cols = linear_sum_assignment(c)
-                D_squared.append(c[rows, cols].sum())
-        return torch.tensor(D_squared, device=g_2.device, dtype=g_2.dtype).view(len(g_1), len(g_2)).sqrt()
-
-    @torch.no_grad()
-    def cost_matrices(self, g_1, g_2, w=None):
-        """
-        Compute the squared product distances between all pairs within blocks,
-        `C[k, i, j] = ρ(g_1[k, i], g_2[k, j])^2`, not minimised over
-        permutations, with `G.cost_matrices`, which broadcasts over the factors.
-        """
-        return self.G.cost_matrices(g_1, g_2, w)
-
-    def __repr__(self):
-        return f"({self.G})^{self.m}"
 
 
 class MatrixGroup(_Space):
@@ -1890,3 +1806,90 @@ def _exp_affine(
 
 def _sigmoid(x: torch.Tensor, scale=88.0) -> torch.Tensor:
     return scale * torch.tanh(x / scale)
+
+
+class PowerSpace(_Space):
+    """
+    Power G^m of a space `G` of type `Group`, `MatrixGroup`, or
+    `HomogeneousSpace`, whose elements are `m` points of `G`, of shape
+    [..., m, ...], with the trailing dimensions those of a point of `G`; all
+    operations act on every factor.
+
+    Args:
+        `G`: instance of the space of the factors.
+        `m`: number of factors.
+      Optional:
+        `permutation_invariant`: whether the factors are unordered, so that the
+          distance between two elements is minimised over all permutations of
+          the factors. Defaults to True.
+    """
+
+    def __init__(self, G: Group | MatrixGroup | HomogeneousSpace, m: int, permutation_invariant: bool = True):
+        super().__init__()
+        self.G = G
+        self.m = m
+        self.permutation_invariant = permutation_invariant
+
+    @property
+    def point_size(self) -> int:
+        return self.m * self.G.point_size
+
+    @property
+    def generator_dim(self) -> int:
+        return self.m * self.G.generator_dim
+
+    def generator_components(self, x_1, x_2):
+        """
+        Components of the generators of the exponential curves from `x_1` to
+        `x_2`, factorwise.
+        """
+        return self.G.generator_components(x_1, x_2)
+
+    def flow(self, x, a, t):
+        """
+        Follow the exponential curves from `x` with generator components `a` for
+        a time `t`, factorwise.
+        """
+        return self.G.flow(x, a, t)
+
+    @torch.no_grad()
+    def distance_matrix(
+        self,
+        x_1: torch.Tensor,
+        x_2: torch.Tensor,
+        w: torch.Tensor | None = None,
+        chunk_size: int = 128,
+    ) -> torch.Tensor:
+        """
+        Compute the matrix of logarithmic distances `D[i, j] = ρ(x_1[i], x_2[j])`,
+        with the product distance `ρ^2 = sum_k ρ_G(x_1[i, k], x_2[j, k])^2`. If
+        the space is `permutation_invariant`, it is minimised over all
+        permutations of the factors of `x_2[j]`.
+        """
+        if not self.permutation_invariant:
+            return super().distance_matrix(x_1, x_2, w, chunk_size)
+        D_squared = []
+        for i in range(0, len(x_1), chunk_size):
+            A = self.generator_components(x_1[i:i + chunk_size, None, :, None], x_2[None, :, None])
+            if w is not None:
+                A = w * A
+            C = (A**2).sum(-1).cpu().numpy()
+            for c in C.reshape(-1, *C.shape[2:]):
+                rows, cols = linear_sum_assignment(c)
+                D_squared.append(c[rows, cols].sum())
+        return torch.tensor(D_squared, device=x_2.device, dtype=x_2.dtype).view(len(x_1), len(x_2)).sqrt()
+
+    @torch.no_grad()
+    def cost_matrices(self, x_1, x_2, w=None):
+        """
+        Compute the squared product distances between all pairs within blocks,
+        `C[k, i, j] = ρ(x_1[k, i], x_2[k, j])^2`, not minimised over
+        permutations, as the sum over the factors of `G.cost_matrices`.
+        """
+        B, b = x_1.shape[:2]
+        # Treat every factor of every block as a block of `G`.
+        C = self.G.cost_matrices(x_1.movedim(2, 1).flatten(0, 1), x_2.movedim(2, 1).flatten(0, 1), w)
+        return C.view(B, self.m, b, b).sum(1)
+
+    def __repr__(self):
+        return f"({self.G})^{self.m}"
