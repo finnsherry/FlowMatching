@@ -21,14 +21,17 @@ Also provides example implementations of
   2. `SE2()` <: `Group`: special Euclidean group of roto-translations on
   R^2.
   3. `SE2byRn(se2, rn)` <: `Group`: direct product of SE(2) and R^n.
-  4. `SO3()` <: `MatrixGroup`: special orthogonal group of rotations on R^3.
-  5. `SE3()` <: `MatrixGroup`: special Euclidean group of roto-translations on
+  4. `TSn(n)` <: `Group`: translation-scaling group on R^n.
+  5. `RmbyTSn(rm, tsn)` <: `Group`: direct product of R^m and TS(n).
+  6. `Aff2()` <: `Group`: group of affine transformations on R^2.
+  7. `SO3()` <: `MatrixGroup`: special orthogonal group of rotations on R^3.
+  8. `SE3()` <: `MatrixGroup`: special Euclidean group of roto-translations on
   R^3.
-  6. `SOplus12()` <: `MatrixGroup`: proper orthochronous special orthogonal group of Lorentz transformations on R^3.
-  7. `SEplus12()` <: `MatrixGroup`: proper orthochronous special Euclidean group of Poincare transformations on R^3.
-  8. `M3()` <: `HomogeneousSpace`: position-orientation space R^3 x S^2, which
+  9. `SOplus12()` <: `MatrixGroup`: proper orthochronous special orthogonal group of Lorentz transformations on R^3.
+  10. `SEplus12()` <: `MatrixGroup`: proper orthochronous special Euclidean group of Poincare transformations on R^3.
+  11. `M3()` <: `HomogeneousSpace`: position-orientation space R^3 x S^2, which
   is an SE(3)-homogeneous space.
-  9. `P3()` <: `HomogeneousSpace`: event-velocity space R^3 x H^2, which
+  12. `P3()` <: `HomogeneousSpace`: event-velocity space R^3 x H^2, which
   is an SE^+(1, 2)-homogeneous space.
 """
 
@@ -108,7 +111,7 @@ class Group(ABC):
         """
         if permutation_invariant:
             return self._permutation_invariant_distance_matrix(g_1, g_2, w, chunk_size)
-        D = torch.empty(len(g_1), len(g_2), device=g_2.device)
+        D = torch.empty(len(g_1), len(g_2), device=g_2.device, dtype=g_2.dtype)
         for i in range(0, len(g_1), chunk_size):
             A = self.log(self.L_inv(g_1[i:i + chunk_size, None], g_2[None]))
             if w is not None:
@@ -145,7 +148,7 @@ class Group(ABC):
             for c in C.reshape(-1, *C.shape[2:]):
                 rows, cols = linear_sum_assignment(c)
                 D_squared.append(c[rows, cols].sum())
-        return torch.tensor(D_squared, device=g_2.device).view(len(g_1), len(g_2)).sqrt()
+        return torch.tensor(D_squared, device=g_2.device, dtype=g_2.dtype).view(len(g_1), len(g_2)).sqrt()
 
 
 class Rn(Group):
@@ -211,7 +214,7 @@ class SE2(Group):
         """
         Left multiplication of `g_2` by `g_1`.
         """
-        g = torch.zeros(torch.broadcast_shapes(g_1.shape, g_2.shape), device=g_2.device)
+        g = torch.zeros(torch.broadcast_shapes(g_1.shape, g_2.shape), device=g_2.device, dtype=g_2.dtype)
         x_1 = g_1[..., 0]
         y_1 = g_1[..., 1]
         θ_1 = g_1[..., 2]
@@ -232,7 +235,7 @@ class SE2(Group):
         """
         Left multiplication of `g_2` by `g_1^-1`.
         """
-        g = torch.zeros(torch.broadcast_shapes(g_1.shape, g_2.shape), device=g_2.device)
+        g = torch.zeros(torch.broadcast_shapes(g_1.shape, g_2.shape), device=g_2.device, dtype=g_2.dtype)
         x_1 = g_1[..., 0]
         y_1 = g_1[..., 1]
         θ_1 = g_1[..., 2]
@@ -326,7 +329,7 @@ class SE2byRn(Group):
         Left multiplication of `g_2 = (x_2, p_2)` by `g_1 = (x_1, p_1)`, i.e.
         `(x_1 + x_2, p_1 p_2)`.
         """
-        g = torch.zeros(torch.broadcast_shapes(g_1.shape, g_2.shape), device=g_2.device)
+        g = torch.zeros(torch.broadcast_shapes(g_1.shape, g_2.shape), device=g_2.device, dtype=g_2.dtype)
         g[..., :3] = self.se2.L(g_1[..., :3], g_2[..., :3])
         g[..., 3:] = self.rn.L(g_1[..., 3:], g_2[..., 3:])
         return g
@@ -336,7 +339,7 @@ class SE2byRn(Group):
         Left multiplication of `g_2 = (x_2, p_2)` by `g_1^-1 = (-x_1, p_1^-1)`,
         i.e. `(x_2 - x_1, p_1^-1 p_2)`.
         """
-        g = torch.zeros(torch.broadcast_shapes(g_1.shape, g_2.shape), device=g_2.device)
+        g = torch.zeros(torch.broadcast_shapes(g_1.shape, g_2.shape), device=g_2.device, dtype=g_2.dtype)
         g[..., :3] = self.se2.L_inv(g_1[..., :3], g_2[..., :3])
         g[..., 3:] = self.rn.L_inv(g_1[..., 3:], g_2[..., 3:])
         return g
@@ -380,7 +383,7 @@ class TSn(Group):
         """
         Left multiplication of `g_2` by `g_1`.
         """
-        g = torch.zeros(torch.broadcast_shapes(g_1.shape, g_2.shape), device=g_2.device)
+        g = torch.zeros(torch.broadcast_shapes(g_1.shape, g_2.shape), device=g_2.device, dtype=g_2.dtype)
         x_1 = g_1[..., :-1]
         s_1 = g_1[..., -1]
         x_2 = g_2[..., :-1]
@@ -394,7 +397,7 @@ class TSn(Group):
         """
         Left multiplication of `g_2` by `g_1^-1`.
         """
-        g = torch.zeros(torch.broadcast_shapes(g_1.shape, g_2.shape), device=g_2.device)
+        g = torch.zeros(torch.broadcast_shapes(g_1.shape, g_2.shape), device=g_2.device, dtype=g_2.dtype)
         x_1 = g_1[..., :-1]
         s_1 = g_1[..., -1]
         x_2 = g_2[..., :-1]
@@ -434,12 +437,12 @@ class TSn(Group):
 
 class RmbyTSn(Group):
     """
-    Direct product of m-dimensional translation group and the translation-
-    scaling group on .
+    Direct product of the m-dimensional translation group and the translation-
+    scaling group on R^n.
 
     Args:
-        `se2`: instance of the special Euclidean group.
-        `rn`: instance of the n-dimensional translation group.
+        `rm`: instance of the m-dimensional translation group.
+        `tsn`: instance of the translation-scaling group on R^n.
     """
 
     def __init__(self, rm: Rn, tsn: TSn):
@@ -452,7 +455,7 @@ class RmbyTSn(Group):
         Left multiplication of `g_2 = (x_2, p_2)` by `g_1 = (x_1, p_1)`, i.e.
         `(x_1 + x_2, p_1 p_2)`.
         """
-        g = torch.zeros(torch.broadcast_shapes(g_1.shape, g_2.shape), device=g_2.device)
+        g = torch.zeros(torch.broadcast_shapes(g_1.shape, g_2.shape), device=g_2.device, dtype=g_2.dtype)
         g[..., : self.rm.dim] = self.rm.L(
             g_1[..., : self.rm.dim], g_2[..., : self.rm.dim]
         )
@@ -466,7 +469,7 @@ class RmbyTSn(Group):
         Left multiplication of `g_2 = (x_2, p_2)` by `g_1^-1 = (-x_1, p_1^-1)`,
         i.e. `(x_2 - x_1, p_1^-1 p_2)`.
         """
-        g = torch.zeros(torch.broadcast_shapes(g_1.shape, g_2.shape), device=g_2.device)
+        g = torch.zeros(torch.broadcast_shapes(g_1.shape, g_2.shape), device=g_2.device, dtype=g_2.dtype)
         g[..., : self.rm.dim] = self.rm.L_inv(
             g_1[..., : self.rm.dim], g_2[..., : self.rm.dim]
         )
@@ -511,7 +514,7 @@ class Aff2(Group):
         """
         Left multiplication of `g_2` by `g_1`.
         """
-        g = torch.zeros(torch.broadcast_shapes(g_1.shape, g_2.shape), device=g_2.device)
+        g = torch.zeros(torch.broadcast_shapes(g_1.shape, g_2.shape), device=g_2.device, dtype=g_2.dtype)
 
         t_1 = g_1[..., :2]
         A_1 = g_1[..., 2:].view(*g_1.shape[:-1], 2, 2)
@@ -527,7 +530,7 @@ class Aff2(Group):
         """
         Left multiplication of `g_2` by `g_1^-1`.
         """
-        g = torch.zeros(torch.broadcast_shapes(g_1.shape, g_2.shape), device=g_2.device)
+        g = torch.zeros(torch.broadcast_shapes(g_1.shape, g_2.shape), device=g_2.device, dtype=g_2.dtype)
 
         t_1 = g_1[..., :2, None]
         A_1 = g_1[..., 2:].view(*g_1.shape[:-1], 2, 2)
@@ -668,7 +671,7 @@ class MatrixGroup(ABC):
             `chunk_size`: number of rows of `D` computed at once, to limit memory
             usage. Defaults to 128.
         """
-        D = torch.empty(len(R_1), len(R_2), device=R_2.device)
+        D = torch.empty(len(R_1), len(R_2), device=R_2.device, dtype=R_2.dtype)
         for i in range(0, len(R_1), chunk_size):
             a = self.lie_algebra_components(self.log(self.L_inv(R_1[i:i + chunk_size, None], R_2[None])))
             if w is not None:
@@ -750,7 +753,7 @@ class SO3(MatrixGroup):
         # multiple of n, the one with the largest diagonal entry is the most
         # accurate. Its sign is fixed by sin(θ) n.
         nnT = (
-            (R + R.transpose(-2, -1)) / 2 - cos[..., None, None] * torch.eye(3, device=R.device)
+            (R + R.transpose(-2, -1)) / 2 - cos[..., None, None] * torch.eye(3, device=R.device, dtype=R.dtype)
         ) / (1 - cos).clamp_min(1.0)[..., None, None]
         i = nnT.diagonal(dim1=-2, dim2=-1).argmax(-1)
         n = torch.gather(nnT, -1, i[..., None, None].expand(*i.shape, 3, 1))[..., 0]
@@ -873,15 +876,12 @@ class SE3(MatrixGroup):
         A = self.pack_translation_rotation(A, v, ω)
         return A
 
-    def get_screw_displacement(self, g, ε_stab=0.001):
-        c, t_par, _, R = self._get_screw_displacement(g, ε_stab=ε_stab)
-        return c, t_par, R
-
     def get_screw_displacement_generator(self, g, ε_stab=0.001):
-        c, t_par, ω, _ = self._get_screw_displacement(g, ε_stab=ε_stab)
-        return c, t_par, ω
-
-    def _get_screw_displacement(self, g, ε_stab=0.001):
+        """
+        Decompose `g` as a screw motion: return a point `c` on the screw axis,
+        the translation `t_par` along the axis, and the generator `ω` of the
+        rotation.
+        """
         t, R = self.get_translation_rotation(g)
         ω = self.so3.log(R)
         ω_vec = self.so3.lie_algebra_components(ω)
@@ -896,7 +896,7 @@ class SE3(MatrixGroup):
 
         c = 0.5 * (t_perp + cross_product(_cotan(θ / 2.0) * K, t_perp)).nan_to_num()
 
-        return c * ~parallel, t * parallel + t_par * ~parallel, ω, R
+        return c * ~parallel, t * parallel + t_par * ~parallel, ω
 
     def exp(self, A, ε_stab=0.0001):
         """
@@ -1141,15 +1141,12 @@ class SEplus12(MatrixGroup):
         )
         return A
 
-    def get_screw_displacement(self, g, ε_stab=0.001):
-        c, t_par, _, Λ = self._get_screw_displacement(g, ε_stab=ε_stab)
-        return c, t_par, Λ
-
     def get_screw_displacement_generator(self, g, ε_stab=0.001):
-        c, t_par, ω, _ = self._get_screw_displacement(g, ε_stab=ε_stab)
-        return c, t_par, ω
-
-    def _get_screw_displacement(self, g, ε_stab=0.001):
+        """
+        Decompose `g` as a screw motion: return a point `c` on the axis, the
+        translation `t_par` along the axis, and the generator `ω` of the
+        Lorentz transformation.
+        """
         t, Λ = self.get_translation_lorentz(g)
         ω = self.soplus12.log(Λ, ε_stab=ε_stab)
         ω_vec = self.soplus12.lie_algebra_components(ω)
@@ -1184,7 +1181,6 @@ class SEplus12(MatrixGroup):
             c_timelike * timelike + c_spacelike * spacelike,
             t * lightlike + t_par * ~lightlike,
             ω,
-            Λ,
         )
 
     def exp(self, A, ε_stab=0.0001):
@@ -1274,7 +1270,7 @@ class HomogeneousSpace(ABC):
             `chunk_size`: number of rows of `D` computed at once, to limit memory
             usage. Defaults to 128.
         """
-        D = torch.empty(len(p_1), len(p_2), device=p_2.device)
+        D = torch.empty(len(p_1), len(p_2), device=p_2.device, dtype=p_2.dtype)
         for i in range(0, len(p_1), chunk_size):
             a = self.G.lie_algebra_components(self.get_generator(p_1[i:i + chunk_size, None], p_2[None]))
             if w is not None:
@@ -1358,7 +1354,7 @@ class M3(HomogeneousSpace):
         ω_vec_mav = θ * k0
         ω_mav = (ω_vec_mav[..., None, None] * self.se3.so3.lie_algebra_basis).sum(-3)
 
-        A = torch.zeros(*shape, 4, 4, device=device)
+        A = torch.zeros(*shape, 4, 4, device=device, dtype=p_2.dtype)
         match generator:
             case "mav":
                 return self.se3.pack_translation_rotation(
@@ -1371,7 +1367,7 @@ class M3(HomogeneousSpace):
                 k = cross_product(x_diff, n_2 - n_1)
                 k = (k / k.norm(dim=-1, keepdim=True)).nan_to_num()
             case float() | int():
-                φ = torch.tensor([generator], device=device)
+                φ = torch.tensor([generator], device=device, dtype=p_2.dtype)
                 khalfπ = (n_1 + n_2) / (n_1 + n_2).norm(
                     dim=-1, keepdim=True
                 ).nan_to_num()
@@ -1476,7 +1472,7 @@ class M3(HomogeneousSpace):
         return x, n
 
     def pack_position_orientation(self, x, n):
-        p = torch.zeros(*n.shape[:-1], 4, 2, device=n.device)
+        p = torch.zeros(*n.shape[:-1], 4, 2, device=n.device, dtype=n.dtype)
         p[..., :3, -2] = x
         p[..., 3, -2] = 1
         p[..., :3, -1] = n
@@ -1573,7 +1569,7 @@ class P3(HomogeneousSpace):
                 c = torch.zeros_like(x_diff)
                 v = x_diff - hyperbolic_cross_product(k, x_m) + xcoth_minus_1 * x_par
             case "timelike":
-                θ = torch.tensor([torch.pi], device=device)
+                θ = torch.tensor([torch.pi], device=device, dtype=p_2.dtype)
                 k = θ * kt
 
                 x_perp = (kt @ self.η * x_diff).sum(-1, keepdim=True) * kt
@@ -1592,7 +1588,7 @@ class P3(HomogeneousSpace):
                 c = torch.zeros_like(x_diff)
                 v = (t - 1.0 / 2.0 * ω @ t + 1.0 / 12.0 * ω @ ω @ t)[..., 0]
             case float() | int():
-                φ = torch.tensor([generator], device=device)
+                φ = torch.tensor([generator], device=device, dtype=p_2.dtype)
                 kφ = torch.cosh(φ) * ks - torch.sinh(φ) * kt
 
                 n_1p = n_1 + (kφ @ self.η * n_1).sum(-1, keepdim=True) * kφ
@@ -1617,7 +1613,7 @@ class P3(HomogeneousSpace):
 
         ω = (k[..., None, None] * self.seplus12.soplus12.lie_algebra_basis).sum(-3)
 
-        A = torch.zeros(*shape, 4, 4, device=device)
+        A = torch.zeros(*shape, 4, 4, device=device, dtype=p_2.dtype)
 
         return self.seplus12.pack_translation_lorentz(
             A,
@@ -1715,7 +1711,7 @@ class P3(HomogeneousSpace):
         return x, n
 
     def pack_event_velocity(self, x, n):
-        p = torch.zeros(*n.shape[:-1], 4, 2, device=n.device)
+        p = torch.zeros(*n.shape[:-1], 4, 2, device=n.device, dtype=n.dtype)
         p[..., :3, -2] = x
         p[..., 3, -2] = 1
         p[..., :3, -1] = n
@@ -1753,7 +1749,7 @@ def cross_product(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
 
 def hyperbolic_cross_product(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
     shape = torch.broadcast_shapes(x.shape, y.shape)
-    z = torch.zeros(*shape, device=x.device)
+    z = torch.zeros(*shape, device=x.device, dtype=x.dtype)
 
     x1 = x[..., 0]
     x2 = x[..., 1]
@@ -1774,14 +1770,6 @@ def _cotan(x: torch.Tensor) -> torch.Tensor:
 
 def _cotanh(x: torch.Tensor) -> torch.Tensor:
     return 1 / torch.tanh(x)
-
-
-def _arccos(x: torch.Tensor) -> torch.Tensor:
-    return torch.arccos(torch.clamp(x, -1.0, 1.0))
-
-
-def _arccosh(x: torch.Tensor) -> torch.Tensor:
-    return torch.arccosh(torch.clamp_min(x, 1.0))
 
 
 def _sinc(x: torch.Tensor) -> torch.Tensor:
