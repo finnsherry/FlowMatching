@@ -56,12 +56,9 @@ class _Space(ABC):
     `ρ(x_1, x_2) = ||w * a||`, with `a` the components of the generator of the
     exponential curve from `x_1` to `x_2`.
 
-    Subclasses provide `point_ndim`, the number of trailing tensor dimensions of
-    a single point, `point_size`, its number of entries, and `generator_dim`,
-    the number of components of a generator.
+    Subclasses provide `point_size`, the number of entries of a single point,
+    and `generator_dim`, the number of components of a generator.
     """
-
-    point_ndim: int
 
     @abstractmethod
     def generator_components(self, x_1: torch.Tensor, x_2: torch.Tensor) -> torch.Tensor:
@@ -137,8 +134,6 @@ class Group(_Space):
     Requires implementing hand crafted group multiplication, multiplication by
     inverse, exponential, and logarithm.
     """
-
-    point_ndim = 1
 
     def __init__(self, dim: int):
         super().__init__()
@@ -333,21 +328,6 @@ class SE2(Group):
         g[..., 1] = (c1 * sin + c2 * cos) * sinc
         g[..., 2] = _mod_offset(c3, 2 * torch.pi, -torch.pi)
         return g
-
-    def L_star(self, g, A):
-        """
-        Push-forward of `A` under left multiplication by `g`.
-        """
-        B = torch.zeros_like(A)
-        θ = g[..., 2]
-
-        cos = torch.cos(θ)
-        sin = torch.sin(θ)
-
-        B[..., 0] = cos * A[..., 0] - sin * A[..., 1]
-        B[..., 1] = sin * A[..., 0] + cos * A[..., 1]
-        B[..., 2] = A[..., 2]
-        return B
 
     def __repr__(self):
         return "SE(2)"
@@ -655,17 +635,11 @@ class PowerGroup(Group):
           the factors. Defaults to True.
     """
 
-    point_ndim = 2
-
     def __init__(self, G: Group, m: int, permutation_invariant: bool = True):
         super().__init__(dim=m * G.dim)
         self.G = G
         self.m = m
         self.permutation_invariant = permutation_invariant
-
-    @property
-    def point_size(self) -> int:
-        return self.m * self.G.dim
 
     def L(self, g_1, g_2):
         """
@@ -698,17 +672,14 @@ class PowerGroup(Group):
         g_2: torch.Tensor,
         w: torch.Tensor | None = None,
         chunk_size: int = 128,
-        permutation_invariant: bool | None = None,
     ) -> torch.Tensor:
         """
         Compute the matrix of logarithmic distances `D[i, j] = ρ(g_1[i], g_2[j])`,
         with the product distance `ρ^2 = sum_k ρ_G(g_1[i, k], g_2[j, k])^2`. If
-        `permutation_invariant`, which defaults to that of the space, it is
-        minimised over all permutations of the factors of `g_2[j]`.
+        the space is `permutation_invariant`, it is minimised over all
+        permutations of the factors of `g_2[j]`.
         """
-        if permutation_invariant is None:
-            permutation_invariant = self.permutation_invariant
-        if not permutation_invariant:
+        if not self.permutation_invariant:
             return super().distance_matrix(g_1, g_2, w, chunk_size)
         D_squared = []
         for i in range(0, len(g_1), chunk_size):
@@ -743,8 +714,6 @@ class MatrixGroup(_Space):
     corresponding PyTorch methods. Since PyTorch does not implement a matrix
     logarithm, this must be provided.
     """
-
-    point_ndim = 2
 
     def __init__(self, dim: int, mat_dim: int, lie_algebra_basis):
         super().__init__()
@@ -803,7 +772,7 @@ class MatrixGroup(_Space):
         Compute the Lie algebra element with components `a` with respect to the
         basis given by `self.lie_algebra_basis`.
         """
-        return (a[..., None, None] * self.lie_algebra_basis).sum(-3)
+        return (a[..., None, None] * self.lie_algebra_basis.to(a.dtype)).sum(-3)
 
     def generator_components(self, R_1: torch.Tensor, R_2: torch.Tensor) -> torch.Tensor:
         """
@@ -883,9 +852,9 @@ class SO3(MatrixGroup):
         a_near_π = θ[..., None] * n
 
         a = torch.where(near_π[..., None], a_near_π, a_regular)
-        return (a[..., None, None] * self.lie_algebra_basis).sum(-3)
+        return self.lie_algebra_element(a)
 
-    def exp(self, A, ε_stab=0.001):
+    def exp(self, A):
         """
         Lie group exponential of `A`, i.e. `A` in Lie algebra such that
         `exp(A) = R`.
@@ -1150,7 +1119,7 @@ class SOplus12(MatrixGroup):
         a_near_π = θ[..., None] * k
 
         a = torch.where(near_π[..., None], a_near_π, a_regular)
-        return (a[..., None, None] * self.lie_algebra_basis.to(Λ.dtype)).sum(-3)
+        return self.lie_algebra_element(a)
 
     def exp(self, A, ε_stab=0.0001):
         """
@@ -1354,8 +1323,6 @@ class HomogeneousSpace(_Space):
     `MatrixGroup`.
     """
 
-    point_ndim = 2
-
     def __init__(self, G: MatrixGroup, mat_dim: int):
         super().__init__()
         self.G = G
@@ -1373,9 +1340,11 @@ class HomogeneousSpace(_Space):
     def get_generator(self, p_1: torch.Tensor, p_2: torch.Tensor) -> torch.Tensor:
         raise NotImplementedError
 
-    @abstractmethod
     def act(self, g: torch.Tensor, p: torch.Tensor) -> torch.Tensor:
-        raise NotImplementedError
+        """
+        Action of `g` on `p`, i.e. `g p`.
+        """
+        return g @ p
 
     def generator_components(self, p_1: torch.Tensor, p_2: torch.Tensor) -> torch.Tensor:
         """
@@ -1447,7 +1416,7 @@ class M3(HomogeneousSpace):
         v_mav = x_perp
 
         ω_vec_mav = θ * k0
-        ω_mav = (ω_vec_mav[..., None, None] * self.se3.so3.lie_algebra_basis).sum(-3)
+        ω_mav = self.se3.so3.lie_algebra_element(ω_vec_mav)
 
         A = torch.zeros(*shape, 4, 4, device=device, dtype=p_2.dtype)
         match generator:
@@ -1484,7 +1453,7 @@ class M3(HomogeneousSpace):
         v = x_perp
 
         ω_vec = θ * k
-        ω = (ω_vec[..., None, None] * self.se3.so3.lie_algebra_basis).sum(-3)
+        ω = self.se3.so3.lie_algebra_element(ω_vec)
 
         return self.se3.pack_translation_rotation(
             A,
@@ -1558,9 +1527,6 @@ class M3(HomogeneousSpace):
         C = torch.where(parallel, w_t**2 * Δx_squared, w_t**2 * v_squared + w_r**2 * θ**2)
         return C.clamp_min(0.0)
 
-    def act(self, g, p):
-        return g @ p
-
     def get_position_orientation(self, p):
         x = p[..., :3, -2]
         n = p[..., :3, -1]
@@ -1625,12 +1591,13 @@ class P3(HomogeneousSpace):
         x_m = (x_1 + x_2) / 2.0
         x_diff = x_2 - x_1
 
-        ks = hyperbolic_cross_product(n_1, n_2)
-        ks = ks / (-(ks @ self.η * ks).sum(-1, keepdim=True)).sqrt()
-        kt = n_1 + n_2
-        kt = kt / (kt @ self.η * kt).sum(-1, keepdim=True).sqrt()
-
-        i = (n_1 @ self.η * n_2).sum(-1, keepdim=True)
+        if generator != "spacelike":
+            # The unit axes, which the spacelike generator avoids since `ks` is
+            # undefined for `n_1 = n_2`.
+            ks = hyperbolic_cross_product(n_1, n_2)
+            ks = ks / (-(ks @ self.η * ks).sum(-1, keepdim=True)).sqrt()
+            kt = n_1 + n_2
+            kt = kt / (kt @ self.η * kt).sum(-1, keepdim=True).sqrt()
 
         match generator:
             case "spacelike":
@@ -1673,11 +1640,10 @@ class P3(HomogeneousSpace):
                 c = x_m
                 v = x_perp
             case "lightlike":
+                i = (n_1 @ self.η * n_2).sum(-1, keepdim=True)
                 s = 2 * ((i - 1.0) / (i + 1.0)).sqrt()
                 k = s * (ks + kt)
-                ω = (k[..., None, None] * self.seplus12.soplus12.lie_algebra_basis).sum(
-                    -3
-                )
+                ω = self.seplus12.soplus12.lie_algebra_element(k)
 
                 t = x_2[..., None] - self.seplus12.soplus12.exp(ω) @ x_1[..., None]
                 c = torch.zeros_like(x_diff)
@@ -1706,7 +1672,7 @@ class P3(HomogeneousSpace):
             case _:
                 raise ValueError(f"{generator} is not a supported type of generator!")
 
-        ω = (k[..., None, None] * self.seplus12.soplus12.lie_algebra_basis).sum(-3)
+        ω = self.seplus12.soplus12.lie_algebra_element(k)
 
         A = torch.zeros(*shape, 4, 4, device=device, dtype=p_2.dtype)
 
@@ -1797,9 +1763,6 @@ class P3(HomogeneousSpace):
         )
         return (w_t**2 * v_squared + w_r**2 * α**2 * u_squared).clamp_min(0.0)
 
-    def act(self, g, p):
-        return g @ p
-
     def get_event_velocity(self, p):
         x = p[..., :3, -2]
         n = p[..., :3, -1]
@@ -1843,20 +1806,8 @@ def cross_product(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
 
 
 def hyperbolic_cross_product(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
-    shape = torch.broadcast_shapes(x.shape, y.shape)
-    z = torch.zeros(*shape, device=x.device, dtype=x.dtype)
-
-    x1 = x[..., 0]
-    x2 = x[..., 1]
-    x3 = x[..., 2]
-    y1 = y[..., 0]
-    y2 = y[..., 1]
-    y3 = y[..., 2]
-    z[..., 0] = x2 * y3 - x3 * y2
-    z[..., 1] = x1 * y3 - x3 * y1
-    z[..., 2] = x2 * y1 - x1 * y2
-
-    return z
+    """Compute `η (x × y)` with `η = diag(1, -1, -1)`."""
+    return cross_product(x, y) * torch.tensor([1.0, -1.0, -1.0], device=x.device, dtype=x.dtype)
 
 
 def _cotan(x: torch.Tensor) -> torch.Tensor:

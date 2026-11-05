@@ -57,8 +57,6 @@ def compare(
     X: torch.Tensor,
     Y: torch.Tensor,
     w: torch.Tensor | None = None,
-    chunk_size: int = 128,
-    **kwargs,
 ) -> dict[str, float]:
     """
     Compute the Wasserstein-1 distance, precision, and coverage between samples
@@ -72,10 +70,7 @@ def compare(
       Optional:
         `w`: weights of the components of the generator, as in
         `LogarithmicDistance`. Defaults to all ones.
-        `chunk_size`: number of rows of the distance matrix computed at once,
-        to limit memory usage. Defaults to 128.
-        `kwargs`: passed on to `G.distance_matrix`.
     """
-    D = G.distance_matrix(X, Y, w, chunk_size=chunk_size, **kwargs)
+    D = G.distance_matrix(X, Y, w)
     precision, coverage = precision_coverage(D)
     return {"W_1": wasserstein(D), "precision": precision, "coverage": coverage}

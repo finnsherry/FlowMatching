@@ -200,7 +200,6 @@ class FlowField(nn.Module):
         x_0: torch.Tensor,
         x_1: torch.Tensor,
         w: torch.Tensor | None = None,
-        chunk_size: int = 128,
         N_steps: int = 120,
         method: str = "heun",
     ) -> dict[str, float]:
@@ -215,14 +214,12 @@ class FlowField(nn.Module):
           Optional:
             `w`: weights of the components of the generator, as in
             `LogarithmicDistance`. Defaults to all ones.
-            `chunk_size`: number of rows of the distance matrices computed at once,
-            to limit memory usage. Defaults to 128.
             `N_steps`: number of integration steps. Defaults to 120.
             `method`: integration method, `"euler"` or `"heun"`. Defaults to
             `"heun"`.
         """
         x_1_pred = self.sample(x_0, N_steps=N_steps, method=method)
-        return compare(self.space, x_1_pred, x_1, w, chunk_size=chunk_size)
+        return compare(self.space, x_1_pred, x_1, w)
 
     @property
     def parameter_count(self):
