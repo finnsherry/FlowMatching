@@ -2,15 +2,13 @@
 models
 ======
 
-Implementations of flow matching[1] on Lie groups over exponential curves,[2]
+Implementation of flow matching[1] on Lie groups over exponential curves,[2]
 on powers of Lie groups, and on homogeneous spaces of matrix groups, such as
 position-orientation space M3 of SE(3) with mav exponential curves,[3] and
 event-velocity space P3 of SE^+(1, 2).
-The implementation is slightly different for groups of type `Group`,
-`MatrixGroup`, and for `HomogeneousSpace`s; the method `get_model_FM` will
-return an instance of a flow matching model, corresponding to the type of the
-space. `DataGenerator` draws the training pairs, optionally coupled by
-mini-batch optimal transport with `OTCoupling`.
+The model is implemented in the `FlowField` class.
+`DataGenerator` draws the training pairs, optionally coupled by mini-batch
+optimal transport with `OTCoupling`.
 
 References:
   [1]: Y. Lipman, R.T.Q. Chen, H. Ben-Hami, M. Nickel, and M. Le.
@@ -30,348 +28,34 @@ import torch
 from torch import nn
 from tqdm.auto import tqdm
 
-from lieflow.groups import Group, HomogeneousSpace, MatrixGroup
+from lieflow.groups import Group, HomogeneousSpace, MatrixGroup, PowerGroup
 from lieflow.metrics import compare
 
 
-def get_model_FM(
-    G: Group | MatrixGroup | HomogeneousSpace,
-    L: int = 2,
-    power_group: bool = False,
-    H: int = 64,
-    embed_dim: int = 256,
-    num_heads: int = 8,
-    expansion: int = 4,
-):
+class FlowField(nn.Module):
     """
-    Return an instance of a flow matching model corresponding to the type of
-    `G`.
+    Model for flow matching[1] over exponential curves[2] on a Lie group or a
+    homogeneous space, such as position-orientation space `M3` with mav
+    exponential curves.[3] The model only uses the exponential curves of the
+    space, through its methods `generator_components` and `flow`. The network
+    is an MLP on the flattened points, or, if `space` is a `PowerGroup`, a
+    transformer with one token per factor, which is equivariant under
+    permutations of the factors.
 
     Args:
-        `G`: group of type `Group` or `MatrixGroup`, or a `HomogeneousSpace`.
+        `space`: group of type `Group` or `MatrixGroup`, or a
+          `HomogeneousSpace`.
       Optional:
-        `L`: depth of the network: number of layers - 2. Defaults to 2.
-        `power_group`: boolean describing whether data live in the group `G`
-        (False) or in a simple power thereof (True). If `power_group == False`,
-        we use an MLP, with optional arguments `H`. If `power_group == True`, we
-        use a transformer, with optional arguments `embed_dim`, `num_heads`, and
-        `expansion`. Defaults to False.
-        `H`: width of the network: number of channels. Defaults to 64.
-        `embed_dim`: dimension of the linear embedding of the tokens.
-        `num_heads`: number of heads in the multihead attention.
-        `expansion`: expansion factor in the pointwise feedforward network.
-    """
-    if isinstance(G, Group):
-        if power_group:
-            return FlowFieldPowerGroup(
-                G,
-                embed_dim=embed_dim,
-                num_heads=num_heads,
-                expansion=expansion,
-                L=L,
-            )
-        else:
-            return FlowFieldGroup(G, H=H, L=L)
-    elif isinstance(G, MatrixGroup):
-        return FlowFieldMatrixGroup(G, H=H, L=L)
-    elif isinstance(G, HomogeneousSpace):
-        return FlowFieldHomogeneousSpace(G, H=H, L=L)
-    else:
-        raise TypeError(
-            f"{G} is neither a `Group`, a `MatrixGroup`, nor a  `HomogeneousSpace`!"
-        )
-
-
-class FlowFieldGroup(nn.Module):
-    """
-    Model for flow matching[1] on Lie groups of type `Group` over exponential
-    curves.[2]
-
-    Args:
-        `G`: group of type `Group`.
-      Optional:
-        `H`: width of the network: number of channels. Defaults to 64.
-        `L`: depth of the network: number of hidden layers, which are the same
-          `ResidualBlock`. Defaults to 2.
-
-    References:
-        [1]: Y. Lipman, R.T.Q. Chen, H. Ben-Hami, M. Nickel, and M. Le.
-          "Flow Matching for Generative Modeling." arXiv preprint (2022).
-          DOI:10.48550/arXiv.2210.02747.
-        [2]: F.M. Sherry and B.M.N. Smets. "Flow Matching on Lie Groups." 7th
-          International Conference on Geometric Science of Information (2025).
-          DOI:10.1007/978-3-032-03918-7_6.
-    """
-
-    def __init__(
-        self,
-        G: Group,
-        H: int = 64,
-        L: int = 2,
-    ):
-        super().__init__()
-        self.G = G
-        self.network = _mlp(G.dim + 1, G.dim, H, L)
-
-    def forward(self, g_t: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
-        return self.network(torch.cat((g_t, t), dim=-1))
-
-    def velocity(self, g_t: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
-        """
-        Return the components of the flow field at `g_t` at the time `t`.
-        """
-        t = t.view(1, 1).expand(g_t.shape[0], 1)
-        return self(g_t, t)
-
-    def advance(
-        self, g_t: torch.Tensor, v: torch.Tensor, Δt: torch.Tensor
-    ) -> torch.Tensor:
-        """
-        Follow the exponential curve with generator components `v` from `g_t`
-        for a time `Δt`.
-        """
-        return self.G.L(g_t, self.G.exp(Δt * v))
-
-    def step(
-        self, g_t: torch.Tensor, t: torch.Tensor, Δt: torch.Tensor, method: str = "heun"
-    ) -> torch.Tensor:
-        """
-        Take a step of size `Δt` from time `t`, with the explicit Euler method
-        (`method="euler"`) or Heun's method (`method="heun"`).
-        """
-        return _step(self, g_t, t, Δt, method)
-
-    @torch.no_grad()
-    def sample(
-        self, g_0: torch.Tensor, N_steps: int = 120, method: str = "heun"
-    ) -> torch.Tensor:
-        """
-        Integrate the flow from samples `g_0` at t = 0 to t = 1 in `N_steps`
-        steps, with the explicit Euler method (`method="euler"`) or Heun's
-        method (`method="heun"`), which costs two evaluations of the network per
-        step but is second-order accurate.
-        """
-        return _sample(self, g_0, N_steps, method)
-
-    def train_network(
-        self, device, train_loader, optimizer, scheduler, ema, loss, show_progress=True
-    ):
-        """
-        Train for one epoch. After every batch, step the learning rate
-        `scheduler`, and update the exponential moving average `ema` of the
-        weights, which is a `torch.optim.swa_utils.AveragedModel` of `self`.
-        """
-        return _train_epoch(
-            self, device, train_loader, optimizer, scheduler, ema, loss, show_progress
-        )
-
-    def training_pairs(
-        self, g_0: torch.Tensor, g_1: torch.Tensor
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """
-        Return the points `g_t` at uniformly random times `t` on the exponential
-        curves from `g_0` to `g_1`, the times `t`, and the generators `A_t` of
-        the curves, which are the regression targets.
-        """
-        t = torch.rand(len(g_1), 1, device=g_1.device, dtype=g_1.dtype)
-        A_t = self.G.log(self.G.L_inv(g_0, g_1))
-        g_t = self.G.L(g_0, self.G.exp(t * A_t))
-        return g_t, t, A_t
-
-    @torch.no_grad()
-    def evaluate(
-        self,
-        g_0: torch.Tensor,
-        g_1: torch.Tensor,
-        w: torch.Tensor | None = None,
-        chunk_size: int = 128,
-        N_steps: int = 120,
-        method: str = "heun",
-    ) -> dict[str, float]:
-        """
-        Compute the Wasserstein-1 distance, precision, and coverage between
-        samples generated by integrating the flow from `g_0`, and target samples
-        `g_1`.
-
-        Args:
-            `g_0`: initial samples of shape [N, ...].
-            `g_1`: target samples of shape [N, ...].
-          Optional:
-            `w`: weights of the components of the generator, as in
-            `LogarithmicDistance`. Defaults to all ones.
-            `chunk_size`: number of rows of the distance matrices computed at once,
-            to limit memory usage. Defaults to 128.
-            `N_steps`: number of integration steps. Defaults to 120.
-            `method`: integration method, `"euler"` or `"heun"`. Defaults to
-            `"heun"`.
-        """
-        g_1_pred = self.sample(g_0, N_steps=N_steps, method=method)
-        return compare(
-            self.G, g_1_pred, g_1, w, chunk_size=chunk_size
-        )
-
-    @property
-    def parameter_count(self):
-        return sum(p.numel() for p in self.parameters())
-
-
-class FlowFieldMatrixGroup(nn.Module):
-    """
-    Model for flow matching[1] on Lie groups of type `MatrixGroup` over
-    exponential curves.[2]
-
-    Args:
-        `G`: group of type `MatrixGroup`.
-      Optional:
-        `H`: width of the network: number of channels. Defaults to 64.
-        `L`: depth of the network: number of hidden layers, which are the same
-          `ResidualBlock`. Defaults to 2.
-
-    References:
-        [1]: Y. Lipman, R.T.Q. Chen, H. Ben-Hami, M. Nickel, and M. Le.
-          "Flow Matching for Generative Modeling." arXiv preprint (2022).
-          DOI:10.48550/arXiv.2210.02747.
-        [2]: F.M. Sherry and B.M.N. Smets. "Flow Matching on Lie Groups." 7th
-          International Conference on Geometric Science of Information (2025).
-          DOI:10.1007/978-3-032-03918-7_6.
-    """
-
-    def __init__(
-        self,
-        G: MatrixGroup,
-        H: int = 64,
-        L: int = 2,
-    ):
-        super().__init__()
-        self.G = G
-        self.network = _mlp(G.mat_dim + 1, G.dim, H, L)
-
-    def forward(self, R_t: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
-        return self.network(
-            torch.cat(
-                (
-                    R_t.flatten(start_dim=-2, end_dim=-1),
-                    t.flatten(start_dim=-2, end_dim=-1),
-                ),
-                dim=-1,
-            )
-        )
-
-    def velocity(self, R_t: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
-        """
-        Return the components w.r.t. the Lie algebra basis of the flow field at
-        `R_t` at the time `t`.
-        """
-        t = t.view(1, 1).expand(R_t.shape[0], 1, 1)
-        return self(R_t, t)
-
-    def advance(
-        self, R_t: torch.Tensor, v: torch.Tensor, Δt: torch.Tensor
-    ) -> torch.Tensor:
-        """
-        Follow the exponential curve with generator components `v` from `R_t`
-        for a time `Δt`.
-        """
-        A = (v[..., None, None] * self.G.lie_algebra_basis).sum(-3)
-        return self.G.L(R_t, self.G.exp(Δt * A))
-
-    def step(
-        self, R_t: torch.Tensor, t: torch.Tensor, Δt: torch.Tensor, method: str = "heun"
-    ) -> torch.Tensor:
-        """
-        Take a step of size `Δt` from time `t`, with the explicit Euler method
-        (`method="euler"`) or Heun's method (`method="heun"`).
-        """
-        return _step(self, R_t, t, Δt, method)
-
-    @torch.no_grad()
-    def sample(
-        self, R_0: torch.Tensor, N_steps: int = 120, method: str = "heun"
-    ) -> torch.Tensor:
-        """
-        Integrate the flow from samples `R_0` at t = 0 to t = 1 in `N_steps`
-        steps, with the explicit Euler method (`method="euler"`) or Heun's
-        method (`method="heun"`), which costs two evaluations of the network per
-        step but is second-order accurate.
-        """
-        return _sample(self, R_0, N_steps, method)
-
-    def train_network(
-        self, device, train_loader, optimizer, scheduler, ema, loss, show_progress=True
-    ):
-        """
-        Train for one epoch. After every batch, step the learning rate
-        `scheduler`, and update the exponential moving average `ema` of the
-        weights, which is a `torch.optim.swa_utils.AveragedModel` of `self`.
-        """
-        return _train_epoch(
-            self, device, train_loader, optimizer, scheduler, ema, loss, show_progress
-        )
-
-    def training_pairs(
-        self, R_0: torch.Tensor, R_1: torch.Tensor
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """
-        Return the points `R_t` at uniformly random times `t` on the exponential
-        curves from `R_0` to `R_1`, the times `t`, and the components `a_t` of
-        the generators of the curves, which are the regression targets.
-        """
-        t = torch.rand(len(R_1), 1, 1, device=R_1.device, dtype=R_1.dtype)
-        A_t = self.G.log(self.G.L_inv(R_0, R_1))
-        R_t = self.G.L(R_0, self.G.exp(t * A_t))
-        # Components w.r.t. Lie algebra basis.
-        a_t = self.G.lie_algebra_components(A_t)
-        return R_t, t, a_t
-
-    @torch.no_grad()
-    def evaluate(
-        self,
-        R_0: torch.Tensor,
-        R_1: torch.Tensor,
-        w: torch.Tensor | None = None,
-        chunk_size: int = 128,
-        N_steps: int = 120,
-        method: str = "heun",
-    ) -> dict[str, float]:
-        """
-        Compute the Wasserstein-1 distance, precision, and coverage between
-        samples generated by integrating the flow from `R_0`, and target samples
-        `R_1`.
-
-        Args:
-            `R_0`: initial samples of shape [N, ...].
-            `R_1`: target samples of shape [N, ...].
-          Optional:
-            `w`: weights of the components of the generator, as in
-            `LogarithmicDistance`. Defaults to all ones.
-            `chunk_size`: number of rows of the distance matrices computed at once,
-            to limit memory usage. Defaults to 128.
-            `N_steps`: number of integration steps. Defaults to 120.
-            `method`: integration method, `"euler"` or `"heun"`. Defaults to
-            `"heun"`.
-        """
-        R_1_pred = self.sample(R_0, N_steps=N_steps, method=method)
-        return compare(
-            self.G, R_1_pred, R_1, w, chunk_size=chunk_size
-        )
-
-    @property
-    def parameter_count(self):
-        return sum(p.numel() for p in self.parameters())
-
-
-class FlowFieldHomogeneousSpace(nn.Module):
-    """
-    Model for flow matching[1] on Lie group homogeneous spaces.
-    Of particular interest is position-orientation space `M3` over SE(3), for
-    which we can use mav exponential curves.[2][3]
-
-    Args:
-        `h`: instance of `HomogeneousSpace`.
-      Optional:
-        `H`: width of the network: number of channels. Defaults to 64.
-        `L`: depth of the network: number of hidden layers, which are the same
-          `ResidualBlock`. Defaults to 2.
+        `L`: depth of the network: number of hidden layers of the MLP, which
+          are the same `ResidualBlock`, or number of encoder blocks of the
+          transformer, which are the same `EncoderBlock`. Defaults to 2.
+        `H`: width of the MLP: number of channels. Defaults to 64.
+        `embed_dim`: dimension of the linear embedding of the tokens of the
+          transformer. Defaults to 256.
+        `num_heads`: number of heads in the multihead attention of the
+          transformer. Defaults to 8.
+        `expansion`: expansion factor in the pointwise feedforward network of
+          the transformer. Defaults to 4.
 
     References:
         [1]: Y. Lipman, R.T.Q. Chen, H. Ben-Hami, M. Nickel, and M. Le.
@@ -388,244 +72,146 @@ class FlowFieldHomogeneousSpace(nn.Module):
 
     def __init__(
         self,
-        h: HomogeneousSpace,
-        H: int = 64,
+        space: Group | MatrixGroup | HomogeneousSpace,
         L: int = 2,
-    ):
-        super().__init__()
-        self.h = h
-        self.network = _mlp(h.mat_dim + 1, h.G.dim, H, L)
-
-    def forward(self, p_t: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
-        return self.network(torch.cat((p_t.flatten(-2, -1), t.flatten(-2, -1)), dim=-1))
-
-    def velocity(self, p_t: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
-        """
-        Return the components w.r.t. the Lie algebra basis of the flow field at
-        `p_t` at the time `t`.
-        """
-        t = t.view(1, 1).expand(len(p_t), 1, 1)
-        return self(p_t, t)
-
-    def advance(
-        self, p_t: torch.Tensor, v: torch.Tensor, Δt: torch.Tensor
-    ) -> torch.Tensor:
-        """
-        Follow the exponential curve with generator components `v` from `p_t`
-        for a time `Δt`.
-        """
-        A = (v[..., None, None] * self.h.G.lie_algebra_basis).sum(-3)
-        return self.h.act(self.h.G.exp(Δt * A), p_t)
-
-    def step(
-        self, p_t: torch.Tensor, t: torch.Tensor, Δt: torch.Tensor, method: str = "heun"
-    ) -> torch.Tensor:
-        """
-        Take a step of size `Δt` from time `t`, with the explicit Euler method
-        (`method="euler"`) or Heun's method (`method="heun"`).
-        """
-        return _step(self, p_t, t, Δt, method)
-
-    @torch.no_grad()
-    def sample(
-        self, p_0: torch.Tensor, N_steps: int = 120, method: str = "heun"
-    ) -> torch.Tensor:
-        """
-        Integrate the flow from samples `p_0` at t = 0 to t = 1 in `N_steps`
-        steps, with the explicit Euler method (`method="euler"`) or Heun's
-        method (`method="heun"`), which costs two evaluations of the network per
-        step but is second-order accurate.
-        """
-        return _sample(self, p_0, N_steps, method)
-
-    def train_network(
-        self, device, train_loader, optimizer, scheduler, ema, loss, show_progress=True
-    ):
-        """
-        Train for one epoch. After every batch, step the learning rate
-        `scheduler`, and update the exponential moving average `ema` of the
-        weights, which is a `torch.optim.swa_utils.AveragedModel` of `self`.
-        """
-        return _train_epoch(
-            self, device, train_loader, optimizer, scheduler, ema, loss, show_progress
-        )
-
-    def training_pairs(
-        self, p_0: torch.Tensor, p_1: torch.Tensor
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """
-        Return the points `p_t` at uniformly random times `t` on the exponential
-        curves from `p_0` to `p_1`, the times `t`, and the components `a_t` of
-        the generators of the curves, which are the regression targets.
-        """
-        t = torch.rand(len(p_1), 1, 1, device=p_1.device, dtype=p_1.dtype)
-        A_t = self.h.get_generator(p_0, p_1)
-        p_t = self.h.act(self.h.G.exp(t * A_t), p_0)
-        a_t = self.h.G.lie_algebra_components(A_t)
-        return p_t, t, a_t
-
-    @torch.no_grad()
-    def evaluate(
-        self,
-        p_0: torch.Tensor,
-        p_1: torch.Tensor,
-        w: torch.Tensor | None = None,
-        chunk_size: int = 128,
-        N_steps: int = 120,
-        method: str = "heun",
-    ) -> dict[str, float]:
-        """
-        Compute the Wasserstein-1 distance, precision, and coverage between
-        samples generated by integrating the flow from `p_0`, and target samples
-        `p_1`.
-
-        Args:
-            `p_0`: initial samples of shape [N, ...].
-            `p_1`: target samples of shape [N, ...].
-          Optional:
-            `w`: weights of the components of the generator, as in
-            `LogarithmicDistance`. Defaults to all ones.
-            `chunk_size`: number of rows of the distance matrices computed at once,
-            to limit memory usage. Defaults to 128.
-            `N_steps`: number of integration steps. Defaults to 120.
-            `method`: integration method, `"euler"` or `"heun"`. Defaults to
-            `"heun"`.
-        """
-        p_1_pred = self.sample(p_0, N_steps=N_steps, method=method)
-        return compare(
-            self.h, p_1_pred, p_1, w, chunk_size=chunk_size
-        )
-
-    @property
-    def parameter_count(self):
-        return sum(p.numel() for p in self.parameters())
-
-
-class FlowFieldPowerGroup(nn.Module):
-    """
-    Model for flow matching[1] on powers of Lie groups of type `Group` over
-    exponential curves.[2]
-
-    Args:
-        `G`: group of type `Group`.
-      Optional:
-        `embed_dim`: dimension of the linear embedding of the tokens.
-        `num_heads`: number of heads in the multihead attention.
-        `expansion`: expansion factor in the pointwise feedforward network.
-        `L`: depth of the network: number of encoder blocks, which are the same
-          `EncoderBlock`. Defaults to 2.
-
-    References:
-        [1]: Y. Lipman, R.T.Q. Chen, H. Ben-Hami, M. Nickel, and M. Le.
-          "Flow Matching for Generative Modeling." arXiv preprint (2022).
-          DOI:10.48550/arXiv.2210.02747.
-        [2]: F.M. Sherry and B.M.N. Smets. "Flow Matching on Lie Groups." 7th
-          International Conference on Geometric Science of Information (2025).
-          DOI:10.1007/978-3-032-03918-7_6.
-    """
-
-    def __init__(
-        self,
-        G: Group,
+        H: int = 64,
         embed_dim: int = 256,
         num_heads: int = 8,
         expansion: int = 4,
-        L: int = 2,
     ):
         super().__init__()
-        self.G = G
+        self.space = space
+        self.tokens = isinstance(space, PowerGroup)
+        if self.tokens:
+            self.network = _transformer(space.G.dim + 1, space.G.dim, embed_dim, num_heads, expansion, L)
+        else:
+            self.network = _mlp(space.point_size + 1, space.generator_dim, H, L)
 
-        self.network = nn.Sequential(
-            nn.Linear(G.dim + 1, embed_dim),
-            # The same block L times, so the blocks share their weights.
-            *(L * [EncoderBlock(embed_dim, num_heads, expansion)]),
-            nn.Linear(embed_dim, G.dim),
-        )
+    def forward(self, x_t: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        """
+        Return the predicted generator components at the points `x_t` of shape
+        [N, ...] at the times `t`, with one time per point.
+        """
+        if self.tokens:
+            t = t.reshape(len(t), 1, 1).expand(*x_t.shape[:-1], 1)
+            return self.network(torch.cat((x_t, t), dim=-1))
+        return self.network(torch.cat((x_t.flatten(start_dim=1), t.reshape(len(t), 1)), dim=-1))
 
-    def forward(self, g_t: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
-        return self.network(torch.cat((g_t, t), dim=-1))
-
-    def velocity(self, g_t: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+    def velocity(self, x_t: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         """
-        Return the components of the flow field at `g_t` at the time `t`.
+        Return the components of the flow field at `x_t` at the time `t`.
         """
-        t = t.view(1, 1, 1).expand(*g_t.shape[:-1], 1)
-        return self(g_t, t)
-
-    def advance(
-        self, g_t: torch.Tensor, v: torch.Tensor, Δt: torch.Tensor
-    ) -> torch.Tensor:
-        """
-        Follow the exponential curve with generator components `v` from `g_t`
-        for a time `Δt`.
-        """
-        return self.G.L(g_t, self.G.exp(Δt * v))
+        return self(x_t, t.reshape(1).expand(len(x_t)))
 
     def step(
-        self, g_t: torch.Tensor, t: torch.Tensor, Δt: torch.Tensor, method: str = "heun"
+        self, x_t: torch.Tensor, t: torch.Tensor, Δt: torch.Tensor, method: str = "heun"
     ) -> torch.Tensor:
         """
         Take a step of size `Δt` from time `t`, with the explicit Euler method
-        (`method="euler"`) or Heun's method (`method="heun"`).
+        (`method="euler"`) or Heun's method (`method="heun"`): with `v_1` the
+        velocity at `x_t` and `v_2` the velocity at the Euler prediction, follow
+        the exponential curve with the average `(v_1 + v_2) / 2`. Since the
+        exponential curves are exact for constant generators, this is
+        second-order accurate. Take a negative `Δt` to integrate backwards.
         """
-        return _step(self, g_t, t, Δt, method)
+        v = self.velocity(x_t, t)
+        if method == "heun":
+            v = (v + self.velocity(self.space.flow(x_t, v, Δt), t + Δt)) / 2
+        elif method != "euler":
+            raise ValueError(f"Unknown integration method {method}!")
+        return self.space.flow(x_t, v, Δt)
 
     @torch.no_grad()
     def sample(
-        self, g_0: torch.Tensor, N_steps: int = 120, method: str = "heun"
+        self, x_0: torch.Tensor, N_steps: int = 120, method: str = "heun"
     ) -> torch.Tensor:
         """
-        Integrate the flow from samples `g_0` at t = 0 to t = 1 in `N_steps`
+        Integrate the flow from samples `x_0` at t = 0 to t = 1 in `N_steps`
         steps, with the explicit Euler method (`method="euler"`) or Heun's
         method (`method="heun"`), which costs two evaluations of the network per
         step but is second-order accurate.
         """
-        return _sample(self, g_0, N_steps, method)
+        self.eval()
+        Δt = torch.tensor([1.0 / N_steps], device=x_0.device, dtype=x_0.dtype)
+        x_t = x_0
+        for i in range(N_steps):
+            t = torch.tensor([i / N_steps], device=x_0.device, dtype=x_0.dtype)
+            x_t = self.step(x_t, t, Δt, method)
+        return x_t
 
-    def train_network(
+    def train_epoch(
         self, device, train_loader, optimizer, scheduler, ema, loss, show_progress=True
-    ):
+    ) -> float:
         """
-        Train for one epoch. After every batch, step the learning rate
-        `scheduler`, and update the exponential moving average `ema` of the
-        weights, which is a `torch.optim.swa_utils.AveragedModel` of `self`.
+        Train for one epoch, and return the mean batch loss. If `train_loader`
+        has a method `blocks`, such as `DataGenerator`, the training pairs are
+        computed for blocks of several batches at once, which is much faster for
+        small batches. After every batch, step the learning rate `scheduler`, and
+        update the exponential moving average `ema` of the weights, which is a
+        `torch.optim.swa_utils.AveragedModel` of `self`.
         """
-        return _train_epoch(
-            self, device, train_loader, optimizer, scheduler, ema, loss, show_progress
+        self.train()
+        N_batches = len(train_loader)
+        losses = np.zeros(N_batches, dtype=np.float32)
+        progress = (
+            tqdm(total=N_batches, desc="Training", dynamic_ncols=True, unit="batch", leave=False)
+            if show_progress
+            else None
         )
+        if hasattr(train_loader, "blocks"):
+            blocks = train_loader.blocks()
+        else:
+            blocks = ((g_0, g_1, len(g_1)) for g_0, g_1 in train_loader)
+        i = 0
+        for g_0, g_1, batch_size in blocks:
+            x_t, t, target = self.training_pairs(g_0.to(device), g_1.to(device))
+            for x_t_batch, t_batch, target_batch in zip(
+                x_t.split(batch_size), t.split(batch_size), target.split(batch_size)
+            ):
+                optimizer.zero_grad()
+                batch_loss = loss(self(x_t_batch, t_batch), target_batch)
+                losses[i] = float(batch_loss.cpu().item())
+                batch_loss.backward()
+                optimizer.step()
+                scheduler.step()
+                ema.update_parameters(self)
+                i += 1
+                if progress is not None:
+                    progress.update()
+        if progress is not None:
+            progress.close()
+        return float(losses.mean())
 
     def training_pairs(
-        self, g_0: torch.Tensor, g_1: torch.Tensor
+        self, x_0: torch.Tensor, x_1: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
-        Return the points `g_t` at uniformly random times `t` on the exponential
-        curves from `g_0` to `g_1`, the times `t`, and the generators `A_t` of
-        the curves, which are the regression targets.
+        Return the points `x_t` at uniformly random times `t` on the exponential
+        curves from `x_0` to `x_1`, the times `t`, and the components `a` of the
+        generators of the curves, which are the regression targets.
         """
-        t = torch.rand(len(g_1), 1, 1, device=g_1.device, dtype=g_1.dtype).expand(*g_1.shape[:-1], 1)
-        A_t = self.G.log(self.G.L_inv(g_0, g_1))
-        g_t = self.G.L(g_0, self.G.exp(t * A_t))
-        return g_t, t, A_t
+        a = self.space.generator_components(x_0, x_1)
+        t = torch.rand(len(x_1), *(a.ndim - 1) * [1], device=x_1.device, dtype=x_1.dtype)
+        return self.space.flow(x_0, a, t), t, a
 
     @torch.no_grad()
     def evaluate(
         self,
-        g_0: torch.Tensor,
-        g_1: torch.Tensor,
+        x_0: torch.Tensor,
+        x_1: torch.Tensor,
         w: torch.Tensor | None = None,
         chunk_size: int = 128,
         N_steps: int = 120,
         method: str = "heun",
-        permutation_invariant: bool = True,
     ) -> dict[str, float]:
         """
         Compute the Wasserstein-1 distance, precision, and coverage between
-        samples generated by integrating the flow from `g_0`, and target samples
-        `g_1`.
+        samples generated by integrating the flow from `x_0`, and target samples
+        `x_1`.
 
         Args:
-            `g_0`: initial samples of shape [N, ...].
-            `g_1`: target samples of shape [N, ...].
+            `x_0`: initial samples of shape [N, ...].
+            `x_1`: target samples of shape [N, ...].
           Optional:
             `w`: weights of the components of the generator, as in
             `LogarithmicDistance`. Defaults to all ones.
@@ -634,25 +220,35 @@ class FlowFieldPowerGroup(nn.Module):
             `N_steps`: number of integration steps. Defaults to 120.
             `method`: integration method, `"euler"` or `"heun"`. Defaults to
             `"heun"`.
-            `permutation_invariant`: whether to treat samples as unordered sets
-            of factors, by minimising the distance over all permutations of the
-            factors. The transformer is equivariant under permutations of the
-            factors, so it cannot reproduce a particular ordering. Defaults to
-            True.
         """
-        g_1_pred = self.sample(g_0, N_steps=N_steps, method=method)
-        return compare(
-            self.G,
-            g_1_pred,
-            g_1,
-            w,
-            chunk_size=chunk_size,
-            permutation_invariant=permutation_invariant,
-        )
+        x_1_pred = self.sample(x_0, N_steps=N_steps, method=method)
+        return compare(self.space, x_1_pred, x_1, w, chunk_size=chunk_size)
 
     @property
     def parameter_count(self):
         return sum(p.numel() for p in self.parameters())
+
+
+def _transformer(
+    in_dim: int,
+    out_dim: int,
+    embed_dim: int,
+    num_heads: int,
+    expansion: int,
+    L: int,
+) -> nn.Sequential:
+    """
+    Return a transformer acting on tokens of dimension `in_dim`: a linear
+    embedding, `L` encoder blocks, which are the same `EncoderBlock`, and a
+    linear output layer. Without positional encoding, it is equivariant under
+    permutations of the tokens.
+    """
+    return nn.Sequential(
+        nn.Linear(in_dim, embed_dim),
+        # The same block L times, so the blocks share their weights.
+        *(L * [EncoderBlock(embed_dim, num_heads, expansion)]),
+        nn.Linear(embed_dim, out_dim),
+    )
 
 
 class EncoderBlock(nn.Module):
@@ -730,6 +326,10 @@ class ResidualBlock(nn.Module):
     def forward(self, h: torch.Tensor) -> torch.Tensor:
         return h + self.linear(self.activation(self.norm(h)))
 
+    @property
+    def parameter_count(self):
+        return sum(p.numel() for p in self.parameters())
+
 
 class LogarithmicDistance(nn.Module):
     """
@@ -746,74 +346,6 @@ class LogarithmicDistance(nn.Module):
 
     def __repr__(self):
         return f"LogarithmicDistance{tuple(self.w.tolist())}"
-
-
-def _step(model, x_t, t, Δt, method):
-    """
-    Step of the explicit Euler method, or of Heun's method: with `v_1` the
-    velocity at `x_t` and `v_2` the velocity at the Euler prediction, follow the
-    exponential curve with the average `(v_1 + v_2) / 2`. Since the exponential
-    curves are exact for constant generators, this is second-order accurate.
-    """
-    v = model.velocity(x_t, t)
-    if method == "heun":
-        v = (v + model.velocity(model.advance(x_t, v, Δt), t + Δt)) / 2
-    elif method != "euler":
-        raise ValueError(f"Unknown integration method {method}!")
-    return model.advance(x_t, v, Δt)
-
-
-def _sample(model, x_0, N_steps, method):
-    model.eval()
-    Δt = torch.tensor([1.0 / N_steps], device=x_0.device, dtype=x_0.dtype)
-    x_t = x_0
-    for i in range(N_steps):
-        t = torch.tensor([i / N_steps], device=x_0.device, dtype=x_0.dtype)
-        x_t = _step(model, x_t, t, Δt, method)
-    return x_t
-
-
-def _train_epoch(
-    model, device, train_loader, optimizer, scheduler, ema, loss, show_progress
-):
-    """
-    Train `model` for one epoch. If `train_loader` has a method `blocks`, such
-    as `DataGenerator`, the training pairs are computed for blocks of several
-    batches at once, which is much faster for small batches. After every batch,
-    step the learning rate `scheduler`, and update the exponential moving
-    average `ema` of the weights.
-    """
-    model.train()
-    N_batches = len(train_loader)
-    losses = np.zeros(N_batches, dtype=np.float32)
-    progress = (
-        tqdm(total=N_batches, desc="Training", dynamic_ncols=True, unit="batch", leave=False)
-        if show_progress
-        else None
-    )
-    if hasattr(train_loader, "blocks"):
-        blocks = train_loader.blocks()
-    else:
-        blocks = ((g_0, g_1, len(g_1)) for g_0, g_1 in train_loader)
-    i = 0
-    for g_0, g_1, batch_size in blocks:
-        x_t, t, target = model.training_pairs(g_0.to(device), g_1.to(device))
-        for x_t_batch, t_batch, target_batch in zip(
-            x_t.split(batch_size), t.split(batch_size), target.split(batch_size)
-        ):
-            optimizer.zero_grad()
-            batch_loss = loss(model(x_t_batch, t_batch), target_batch)
-            losses[i] = float(batch_loss.cpu().item())
-            batch_loss.backward()
-            optimizer.step()
-            scheduler.step()
-            ema.update_parameters(model)
-            i += 1
-            if progress is not None:
-                progress.update()
-    if progress is not None:
-        progress.close()
-    return float(losses.mean())
 
 
 class DataGenerator:

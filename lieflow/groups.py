@@ -24,14 +24,18 @@ Also provides example implementations of
   4. `TSn(n)` <: `Group`: translation-scaling group on R^n.
   5. `RmbyTSn(rm, tsn)` <: `Group`: direct product of R^m and TS(n).
   6. `Aff2()` <: `Group`: group of affine transformations on R^2.
-  7. `SO3()` <: `MatrixGroup`: special orthogonal group of rotations on R^3.
-  8. `SE3()` <: `MatrixGroup`: special Euclidean group of roto-translations on
+  7. `PowerGroup(G, m)` <: `Group`: power G^m of a `Group`, by default with
+  unordered factors.
+  8. `SO3()` <: `MatrixGroup`: special orthogonal group of rotations on R^3.
+  9. `SE3()` <: `MatrixGroup`: special Euclidean group of roto-translations on
   R^3.
-  9. `SOplus12()` <: `MatrixGroup`: proper orthochronous special orthogonal group of Lorentz transformations on R^3.
-  10. `SEplus12()` <: `MatrixGroup`: proper orthochronous special Euclidean group of Poincare transformations on R^3.
-  11. `M3()` <: `HomogeneousSpace`: position-orientation space R^3 x S^2, which
+  10. `SOplus12()` <: `MatrixGroup`: proper orthochronous special orthogonal group
+  of Lorentz transformations on R^3.
+  11. `SEplus12()` <: `MatrixGroup`: proper orthochronous special Euclidean group
+  of Poincare transformations on R^3.
+  12. `M3()` <: `HomogeneousSpace`: position-orientation space R^3 x S^2, which
   is an SE(3)-homogeneous space.
-  12. `P3()` <: `HomogeneousSpace`: event-velocity space R^3 x H^2, which
+  13. `P3()` <: `HomogeneousSpace`: event-velocity space R^3 x H^2, which
   is an SE^+(1, 2)-homogeneous space.
 """
 
@@ -43,7 +47,88 @@ import torch
 from scipy.optimize import linear_sum_assignment
 
 
-class Group(ABC):
+class _Space(ABC):
+    """
+    Common base of `Group`, `MatrixGroup`, and `HomogeneousSpace`, which
+    describes a space in terms of the exponential curves connecting its points,
+    as used by the flow matching models and the metrics: the components of
+    their generators, and following them. Provides the logarithmic distance
+    `ρ(x_1, x_2) = ||w * a||`, with `a` the components of the generator of the
+    exponential curve from `x_1` to `x_2`.
+
+    Subclasses provide `point_ndim`, the number of trailing tensor dimensions of
+    a single point, `point_size`, its number of entries, and `generator_dim`,
+    the number of components of a generator.
+    """
+
+    point_ndim: int
+
+    @abstractmethod
+    def generator_components(self, x_1: torch.Tensor, x_2: torch.Tensor) -> torch.Tensor:
+        """
+        Components of the generator of the exponential curve from `x_1` to
+        `x_2`, broadcasting over their leading dimensions.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def flow(self, x: torch.Tensor, a: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        """
+        Follow the exponential curve from `x` with generator components `a` for
+        a time `t`, which broadcasts with `a`.
+        """
+        raise NotImplementedError
+
+    @torch.no_grad()
+    def distance_matrix(
+        self,
+        x_1: torch.Tensor,
+        x_2: torch.Tensor,
+        w: torch.Tensor | None = None,
+        chunk_size: int = 128,
+    ) -> torch.Tensor:
+        """
+        Compute the matrix of logarithmic distances `D[i, j] = ρ(x_1[i], x_2[j])`.
+
+        Args:
+            `x_1`: samples of shape [N, ...].
+            `x_2`: samples of shape [M, ...].
+          Optional:
+            `w`: weights of the components of the generator, as in
+            `LogarithmicDistance`. Defaults to all ones.
+            `chunk_size`: number of rows of `D` computed at once, to limit memory
+            usage. Defaults to 128.
+        """
+        D = torch.empty(len(x_1), len(x_2), device=x_2.device, dtype=x_2.dtype)
+        for i in range(0, len(x_1), chunk_size):
+            a = self.generator_components(x_1[i:i + chunk_size, None], x_2[None])
+            if w is not None:
+                a = w * a
+            D[i:i + chunk_size] = a.flatten(start_dim=2).norm(dim=-1)
+        return D
+
+    @torch.no_grad()
+    def cost_matrices(
+        self, x_1: torch.Tensor, x_2: torch.Tensor, w: torch.Tensor | None = None
+    ) -> torch.Tensor:
+        """
+        Compute the squared logarithmic distances between all pairs within
+        blocks, `C[k, i, j] = ρ(x_1[k, i], x_2[k, j])^2`, as the cost of a
+        mini-batch optimal transport coupling.
+
+        Args:
+            `x_1`: samples of shape [B, b, ...].
+            `x_2`: samples of shape [B, b, ...].
+          Optional:
+            `w`: weights of the components of the generator, as in
+            `LogarithmicDistance`. Defaults to all ones.
+        """
+        return torch.stack(
+            [self.distance_matrix(a, b, w, chunk_size=len(a)) ** 2 for a, b in zip(x_1, x_2)]
+        )
+
+
+class Group(_Space):
     """
     Class encapsulating basic Lie group and Lie algebra properties for groups
     that can be efficiently parametrised with as many parameters as the group
@@ -53,9 +138,19 @@ class Group(ABC):
     inverse, exponential, and logarithm.
     """
 
+    point_ndim = 1
+
     def __init__(self, dim: int):
         super().__init__()
         self.dim = dim
+
+    @property
+    def point_size(self) -> int:
+        return self.dim
+
+    @property
+    def generator_dim(self) -> int:
+        return self.dim
 
     @abstractmethod
     def L(self, g_1: torch.Tensor, g_2: torch.Tensor) -> torch.Tensor:
@@ -85,70 +180,19 @@ class Group(ABC):
         """
         raise NotImplementedError
 
-    @torch.no_grad()
-    def distance_matrix(
-        self,
-        g_1: torch.Tensor,
-        g_2: torch.Tensor,
-        w: torch.Tensor | None = None,
-        chunk_size: int = 128,
-        permutation_invariant: bool = False,
-    ) -> torch.Tensor:
+    def generator_components(self, g_1: torch.Tensor, g_2: torch.Tensor) -> torch.Tensor:
         """
-        Compute the pairwise logarithmic distances between `g_1` and `g_2`.
-
-        Args:
-            `g_1`: samples of shape [N, ..., dim].
-            `g_2`: samples of shape [M, ..., dim].
-          Optional:
-            `w`: metric parameters. Defaults to all ones.
-            `chunk_size`: number of rows of `D` computed at once, to limit memory
-            usage. Defaults to 128.
-            `permutation_invariant`: only for samples in a power of the group,
-            i.e. of shape [N, m, dim]. If True, the distance is minimised over
-            all permutations of the m factors, so that samples are treated as
-            unordered sets. Defaults to False.
+        Components of the generator of the exponential curve from `g_1` to
+        `g_2`, i.e. `log(g_1^-1 g_2)`.
         """
-        if permutation_invariant:
-            return self._permutation_invariant_distance_matrix(g_1, g_2, w, chunk_size)
-        D = torch.empty(len(g_1), len(g_2), device=g_2.device, dtype=g_2.dtype)
-        for i in range(0, len(g_1), chunk_size):
-            A = self.log(self.L_inv(g_1[i:i + chunk_size, None], g_2[None]))
-            if w is not None:
-                A = w * A
-            D[i:i + chunk_size] = A.flatten(start_dim=2).norm(dim=-1)
-        return D
+        return self.log(self.L_inv(g_1, g_2))
 
-    @torch.no_grad()
-    def cost_matrices(
-        self, g_1: torch.Tensor, g_2: torch.Tensor, w: torch.Tensor | None = None
-    ) -> torch.Tensor:
+    def flow(self, g: torch.Tensor, A: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         """
-        Compute the squared logarithmic distances between all pairs within
-        blocks, `C[k, i, j] = ρ(g_1[k, i], g_2[k, j])^2`, as the cost of a
-        mini-batch optimal transport coupling.
-
-        Args:
-            `g_1`: samples of shape [B, b, dim].
-            `g_2`: samples of shape [B, b, dim].
-          Optional:
-            `w`: metric parameters. Defaults to all ones.
+        Follow the exponential curve from `g` with generator `A` for a time
+        `t`, i.e. `g exp(t A)`.
         """
-        return torch.stack(
-            [self.distance_matrix(a, b, w, chunk_size=len(a)) ** 2 for a, b in zip(g_1, g_2)]
-        )
-
-    def _permutation_invariant_distance_matrix(self, g_1, g_2, w, chunk_size):
-        D_squared = []
-        for i in range(0, len(g_1), chunk_size):
-            A = self.log(self.L_inv(g_1[i:i + chunk_size, None, :, None], g_2[None, :, None]))
-            if w is not None:
-                A = w * A
-            C = (A**2).sum(-1).cpu().numpy()
-            for c in C.reshape(-1, *C.shape[2:]):
-                rows, cols = linear_sum_assignment(c)
-                D_squared.append(c[rows, cols].sum())
-        return torch.tensor(D_squared, device=g_2.device, dtype=g_2.dtype).view(len(g_1), len(g_2)).sqrt()
+        return self.L(g, self.exp(t * A))
 
 
 class Rn(Group):
@@ -597,7 +641,100 @@ class Aff2(Group):
         return "Aff^+(2)"
 
 
-class MatrixGroup(ABC):
+class PowerGroup(Group):
+    """
+    Power G^m of a group `G` of type `Group`, whose elements are `m` elements
+    of `G`, of shape [..., m, G.dim]; all operations act on every factor.
+
+    Args:
+        `G`: instance of the group of the factors.
+        `m`: number of factors.
+      Optional:
+        `permutation_invariant`: whether the factors are unordered, so that the
+          distance between two elements is minimised over all permutations of
+          the factors. Defaults to True.
+    """
+
+    point_ndim = 2
+
+    def __init__(self, G: Group, m: int, permutation_invariant: bool = True):
+        super().__init__(dim=m * G.dim)
+        self.G = G
+        self.m = m
+        self.permutation_invariant = permutation_invariant
+
+    @property
+    def point_size(self) -> int:
+        return self.m * self.G.dim
+
+    def L(self, g_1, g_2):
+        """
+        Left multiplication of `g_2` by `g_1`, factorwise.
+        """
+        return self.G.L(g_1, g_2)
+
+    def L_inv(self, g_1, g_2):
+        """
+        Left multiplication of `g_2` by `g_1^-1`, factorwise.
+        """
+        return self.G.L_inv(g_1, g_2)
+
+    def log(self, g):
+        """
+        Lie group logarithm of `g`, factorwise.
+        """
+        return self.G.log(g)
+
+    def exp(self, A):
+        """
+        Lie group exponential of `A`, factorwise.
+        """
+        return self.G.exp(A)
+
+    @torch.no_grad()
+    def distance_matrix(
+        self,
+        g_1: torch.Tensor,
+        g_2: torch.Tensor,
+        w: torch.Tensor | None = None,
+        chunk_size: int = 128,
+        permutation_invariant: bool | None = None,
+    ) -> torch.Tensor:
+        """
+        Compute the matrix of logarithmic distances `D[i, j] = ρ(g_1[i], g_2[j])`,
+        with the product distance `ρ^2 = sum_k ρ_G(g_1[i, k], g_2[j, k])^2`. If
+        `permutation_invariant`, which defaults to that of the space, it is
+        minimised over all permutations of the factors of `g_2[j]`.
+        """
+        if permutation_invariant is None:
+            permutation_invariant = self.permutation_invariant
+        if not permutation_invariant:
+            return super().distance_matrix(g_1, g_2, w, chunk_size)
+        D_squared = []
+        for i in range(0, len(g_1), chunk_size):
+            A = self.generator_components(g_1[i:i + chunk_size, None, :, None], g_2[None, :, None])
+            if w is not None:
+                A = w * A
+            C = (A**2).sum(-1).cpu().numpy()
+            for c in C.reshape(-1, *C.shape[2:]):
+                rows, cols = linear_sum_assignment(c)
+                D_squared.append(c[rows, cols].sum())
+        return torch.tensor(D_squared, device=g_2.device, dtype=g_2.dtype).view(len(g_1), len(g_2)).sqrt()
+
+    @torch.no_grad()
+    def cost_matrices(self, g_1, g_2, w=None):
+        """
+        Compute the squared product distances between all pairs within blocks,
+        `C[k, i, j] = ρ(g_1[k, i], g_2[k, j])^2`, not minimised over
+        permutations, with `G.cost_matrices`, which broadcasts over the factors.
+        """
+        return self.G.cost_matrices(g_1, g_2, w)
+
+    def __repr__(self):
+        return f"({self.G})^{self.m}"
+
+
+class MatrixGroup(_Space):
     """
     Class encapsulating basic Lie group and Lie algebra properties for groups
     that can be efficiently represented with matrices.
@@ -607,11 +744,21 @@ class MatrixGroup(ABC):
     logarithm, this must be provided.
     """
 
+    point_ndim = 2
+
     def __init__(self, dim: int, mat_dim: int, lie_algebra_basis):
         super().__init__()
         self.dim = dim
         self.mat_dim = mat_dim
         self.lie_algebra_basis = lie_algebra_basis
+
+    @property
+    def point_size(self) -> int:
+        return self.mat_dim
+
+    @property
+    def generator_dim(self) -> int:
+        return self.dim
 
     def L(self, R_1: torch.Tensor, R_2: torch.Tensor) -> torch.Tensor:
         """
@@ -651,53 +798,27 @@ class MatrixGroup(ABC):
         """
         raise NotImplementedError
 
-    @torch.no_grad()
-    def distance_matrix(
-        self,
-        R_1: torch.Tensor,
-        R_2: torch.Tensor,
-        w: torch.Tensor | None = None,
-        chunk_size: int = 128,
-    ) -> torch.Tensor:
+    def lie_algebra_element(self, a: torch.Tensor) -> torch.Tensor:
         """
-        Compute the pairwise logarithmic distances between `R_1` and `R_2`.
+        Compute the Lie algebra element with components `a` with respect to the
+        basis given by `self.lie_algebra_basis`.
+        """
+        return (a[..., None, None] * self.lie_algebra_basis).sum(-3)
 
-        Args:
-            `R_1`: samples of shape [N, n, n].
-            `R_2`: samples of shape [M, n, n].
-          Optional:
-            `w`: weights of the components of the generator, as in
-            `LogarithmicDistance`. Defaults to all ones.
-            `chunk_size`: number of rows of `D` computed at once, to limit memory
-            usage. Defaults to 128.
+    def generator_components(self, R_1: torch.Tensor, R_2: torch.Tensor) -> torch.Tensor:
         """
-        D = torch.empty(len(R_1), len(R_2), device=R_2.device, dtype=R_2.dtype)
-        for i in range(0, len(R_1), chunk_size):
-            a = self.lie_algebra_components(self.log(self.L_inv(R_1[i:i + chunk_size, None], R_2[None])))
-            if w is not None:
-                a = w * a
-            D[i:i + chunk_size] = a.norm(dim=-1)
-        return D
+        Components of the generator of the exponential curve from `R_1` to
+        `R_2`, i.e. of `log(R_1^-1 R_2)`.
+        """
+        return self.lie_algebra_components(self.log(self.L_inv(R_1, R_2)))
 
-    @torch.no_grad()
-    def cost_matrices(
-        self, R_1: torch.Tensor, R_2: torch.Tensor, w: torch.Tensor | None = None
-    ) -> torch.Tensor:
+    def flow(self, R: torch.Tensor, a: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         """
-        Compute the squared logarithmic distances between all pairs within
-        blocks, `C[k, i, j] = ρ(R_1[k, i], R_2[k, j])^2`, as the cost of a
-        mini-batch optimal transport coupling.
-
-        Args:
-            `R_1`: samples of shape [B, b, n, n].
-            `R_2`: samples of shape [B, b, n, n].
-          Optional:
-            `w`: weights of the components of the generator, as in
-            `LogarithmicDistance`. Defaults to all ones.
+        Follow the exponential curve from `R` with generator components `a` for
+        a time `t`, i.e. `R exp(t A)` with `A` the Lie algebra element with
+        components `a`.
         """
-        return torch.stack(
-            [self.distance_matrix(a, b, w, chunk_size=len(a)) ** 2 for a, b in zip(R_1, R_2)]
-        )
+        return self.L(R, self.exp(self.lie_algebra_element(t * a)))
 
 
 class SO3(MatrixGroup):
@@ -1227,16 +1348,26 @@ class SEplus12(MatrixGroup):
         return "SE^+(1, 2)"
 
 
-class HomogeneousSpace(ABC):
+class HomogeneousSpace(_Space):
     """
     Class encapsulating basic properties of a homogeneous space of a
     `MatrixGroup`.
     """
 
+    point_ndim = 2
+
     def __init__(self, G: MatrixGroup, mat_dim: int):
         super().__init__()
         self.G = G
         self.mat_dim = mat_dim
+
+    @property
+    def point_size(self) -> int:
+        return self.mat_dim
+
+    @property
+    def generator_dim(self) -> int:
+        return self.G.dim
 
     @abstractmethod
     def get_generator(self, p_1: torch.Tensor, p_2: torch.Tensor) -> torch.Tensor:
@@ -1246,57 +1377,21 @@ class HomogeneousSpace(ABC):
     def act(self, g: torch.Tensor, p: torch.Tensor) -> torch.Tensor:
         raise NotImplementedError
 
-
-    @torch.no_grad()
-    def distance_matrix(
-        self,
-        p_1: torch.Tensor,
-        p_2: torch.Tensor,
-        w: torch.Tensor | None = None,
-        chunk_size: int = 128,
-    ) -> torch.Tensor:
+    def generator_components(self, p_1: torch.Tensor, p_2: torch.Tensor) -> torch.Tensor:
         """
-        Compute the matrix of logarithmic distances `D[i, j] = ρ(p_1[i], p_2[j])`
-        with `ρ(p, q) = ||w * A||`, where `A` is the generator from
-        `get_generator(p, q)` and the norm is taken of its components with
-        respect to the Lie algebra basis of `G`.
-
-        Args:
-            `p_1`: samples of shape [N, ...].
-            `p_2`: samples of shape [M, ...].
-          Optional:
-            `w`: weights of the components of the generator, as in
-            `LogarithmicDistance`. Defaults to all ones.
-            `chunk_size`: number of rows of `D` computed at once, to limit memory
-            usage. Defaults to 128.
+        Components of the generator `get_generator(p_1, p_2)` of the
+        exponential curve from `p_1` to `p_2`, with respect to the Lie algebra
+        basis of `G`.
         """
-        D = torch.empty(len(p_1), len(p_2), device=p_2.device, dtype=p_2.dtype)
-        for i in range(0, len(p_1), chunk_size):
-            a = self.G.lie_algebra_components(self.get_generator(p_1[i:i + chunk_size, None], p_2[None]))
-            if w is not None:
-                a = w * a
-            D[i:i + chunk_size] = a.norm(dim=-1)
-        return D
+        return self.G.lie_algebra_components(self.get_generator(p_1, p_2))
 
-    @torch.no_grad()
-    def cost_matrices(
-        self, p_1: torch.Tensor, p_2: torch.Tensor, w: torch.Tensor | None = None
-    ) -> torch.Tensor:
+    def flow(self, p: torch.Tensor, a: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         """
-        Compute the squared logarithmic distances between all pairs within
-        blocks, `C[k, i, j] = ρ(p_1[k, i], p_2[k, j])^2`, as the cost of a
-        mini-batch optimal transport coupling.
-
-        Args:
-            `p_1`: samples of shape [B, b, ...].
-            `p_2`: samples of shape [B, b, ...].
-          Optional:
-            `w`: weights of the components of the generator, as in
-            `LogarithmicDistance`. Defaults to all ones.
+        Follow the exponential curve from `p` with generator components `a` for
+        a time `t`, i.e. `exp(t A) p` with `A` the Lie algebra element with
+        components `a`.
         """
-        return torch.stack(
-            [self.distance_matrix(a, b, w, chunk_size=len(a)) ** 2 for a, b in zip(p_1, p_2)]
-        )
+        return self.act(self.G.exp(self.G.lie_algebra_element(t * a)), p)
 
 
 class M3(HomogeneousSpace):
