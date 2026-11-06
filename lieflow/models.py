@@ -23,12 +23,11 @@ References:
   DOI:10.1007/978-3-032-03918-7_4.
 """
 
-import numpy as np
 import torch
 from torch import nn
 from tqdm.auto import tqdm
 
-from lieflow.groups import Group, HomogeneousSpace, MatrixGroup, PowerSpace
+from lieflow.groups import PowerSpace, Space
 from lieflow.metrics import compare
 
 
@@ -43,8 +42,8 @@ class FlowField(nn.Module):
     permutations of the factors.
 
     Args:
-        `space`: group of type `Group` or `MatrixGroup`, a `HomogeneousSpace`,
-          or a `PowerSpace` of one of these.
+        `space`: a `Space`, i.e. a group of type `Group` or `MatrixGroup`, a
+          `HomogeneousSpace`, or a `ProductSpace` or `PowerSpace` of these.
       Optional:
         `L`: depth of the network: number of hidden layers of the MLP, which
           are the same `ResidualBlock`, or number of encoder blocks of the
@@ -72,7 +71,7 @@ class FlowField(nn.Module):
 
     def __init__(
         self,
-        space: Group | MatrixGroup | HomogeneousSpace | PowerSpace,
+        space: Space,
         L: int = 2,
         H: int = 64,
         embed_dim: int = 256,
@@ -146,16 +145,18 @@ class FlowField(nn.Module):
         self, device, train_loader, optimizer, scheduler, ema, loss, show_progress=True
     ) -> float:
         """
-        Train for one epoch, and return the mean batch loss. If `train_loader`
-        has a method `blocks`, such as `DataGenerator`, the training pairs are
-        computed for blocks of several batches at once, which is much faster for
-        small batches. After every batch, step the learning rate `scheduler`, and
-        update the exponential moving average `ema` of the weights, which is a
-        `torch.optim.swa_utils.AveragedModel` of `self`.
+        Train for one epoch, and return the mean batch loss. `train_loader`
+        yields batches of pairs `(g_0, g_1)`, e.g. a `DataLoader` of fixed
+        pairs; if it has a method `blocks`, such as `DataGenerator`, the
+        training pairs are computed for blocks of several batches at once, which
+        is much faster for small batches. After every batch, step the learning
+        rate `scheduler`, and update the exponential moving average `ema` of the
+        weights, which is a `torch.optim.swa_utils.AveragedModel` of `self`.
         """
         self.train()
         N_batches = len(train_loader)
-        losses = np.zeros(N_batches, dtype=np.float32)
+        # Kept on the device, so that recording the losses does not synchronise every batch.
+        losses = torch.zeros(N_batches, device=device)
         progress = (
             tqdm(total=N_batches, desc="Training", dynamic_ncols=True, unit="batch", leave=False)
             if show_progress
@@ -173,7 +174,7 @@ class FlowField(nn.Module):
             ):
                 optimizer.zero_grad()
                 batch_loss = loss(x_t_batch, self(x_t_batch, t_batch), target_batch)
-                losses[i] = float(batch_loss.cpu().item())
+                losses[i] = batch_loss.detach()
                 batch_loss.backward()
                 optimizer.step()
                 scheduler.step()
@@ -183,7 +184,7 @@ class FlowField(nn.Module):
                     progress.update()
         if progress is not None:
             progress.close()
-        return float(losses.mean())
+        return float(losses.mean().item())
 
     def training_pairs(
         self, x_0: torch.Tensor, x_1: torch.Tensor
@@ -340,7 +341,7 @@ class LogarithmicDistance(nn.Module):
     components weighted by `w**2`.
     """
 
-    def __init__(self, space: Group | MatrixGroup | HomogeneousSpace | PowerSpace, w: torch.Tensor | None = None):
+    def __init__(self, space: Space, w: torch.Tensor | None = None):
         super().__init__()
         self.space = space
         self.w = w
