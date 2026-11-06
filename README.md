@@ -17,15 +17,14 @@ To reproduce the experiments, one additionally needs:
 * `matplotlib`
 
 The figures were made using LaTeX. Hence, to run the notebooks one either needs to have a LaTeX installation, or to remove the `matplotlib` configuration code
-```python
-    plt.rcParams.update({
-        "text.usetex": True,
-        "font.family": "serif",
-        "font.serif": ["Computer Modern"],
-        "font.size": 10.0,
-    })
+```json
+    "text.usetex": true,
+    "font.family": "serif",
+    "font.serif": ["Computer Modern"],
+    "font.size": 10.0,
+    "text.latex.preamble": "\\usepackage{lmodern} \\usepackage{amssymb} \\usepackage{amsmath}",
 ```
-from `experiments/plot_config.json`.
+from `experiments/plot.json`.
 
 Alternatively, one can create the required conda environment from `env.yml`:
 ```
