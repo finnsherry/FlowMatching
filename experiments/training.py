@@ -54,7 +54,7 @@ def train_model(space, generate_0, generate_1, config, x_0s_eval, x_1s_eval, flo
         optimizer_FM, T_max=config["epochs"] * config["batches_per_epoch"], eta_min=config["learning_rate_final"]
     )
     ema = AveragedModel(model_FM, multi_avg_fn=get_ema_multi_avg_fn(config["ema_decay"]))
-    loss = LogarithmicDistance(torch.tensor(config["loss_weights"], device=device))
+    loss = LogarithmicDistance(space, torch.tensor(config["loss_weights"], device=device))
 
     losses_FM = np.zeros(config["epochs"])
     metrics_FM = {key: np.zeros(config["epochs"]) for key in floor}

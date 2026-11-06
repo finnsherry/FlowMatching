@@ -53,8 +53,9 @@ class _Space(ABC):
     describes a space in terms of the exponential curves connecting its points,
     as used by the flow matching models and the metrics: the components of
     their generators, and following them. Provides the logarithmic distance
-    `ρ(x_1, x_2) = ||w * a||`, with `a` the components of the generator of the
-    exponential curve from `x_1` to `x_2`.
+    `ρ(x_1, x_2) = ||a||_{x_1}`, with `a` the components of the generator of
+    the exponential curve from `x_1` to `x_2`, and `||.||_x` the norm of
+    `generator_norm_squared` at `x`.
 
     Subclasses provide `point_size`, the number of entries of a single point,
     and `generator_dim`, the number of components of a generator.
@@ -76,6 +77,18 @@ class _Space(ABC):
         """
         raise NotImplementedError
 
+    def generator_norm_squared(
+        self, x: torch.Tensor, a: torch.Tensor, w: torch.Tensor | None = None
+    ) -> torch.Tensor:
+        """
+        Squared norm `||a||_x^2` of the generator components `a` at the point
+        `x`, weighted by `w`, broadcasting over their leading dimensions. It
+        must be invariant, `||Ad_g a||_{g x} = ||a||_x`. By default, this is
+        `||w * a||^2`, which is invariant for groups, whose generators
+        `log(g_1^-1 g_2)` are already in the frame of `g_1`.
+        """
+        return ((a if w is None else w * a) ** 2).sum(-1)
+
     @torch.no_grad()
     def distance_matrix(
         self,
@@ -91,17 +104,15 @@ class _Space(ABC):
             `x_1`: samples of shape [N, ...].
             `x_2`: samples of shape [M, ...].
           Optional:
-            `w`: weights of the components of the generator, as in
-            `LogarithmicDistance`. Defaults to all ones.
+            `w`: weights of the generator, as in `generator_norm_squared`.
+            Defaults to all ones.
             `chunk_size`: number of rows of `D` computed at once, to limit memory
             usage. Defaults to 128.
         """
         D = torch.empty(len(x_1), len(x_2), device=x_2.device, dtype=x_2.dtype)
         for i in range(0, len(x_1), chunk_size):
             a = self.generator_components(x_1[i:i + chunk_size, None], x_2[None])
-            if w is not None:
-                a = w * a
-            D[i:i + chunk_size] = a.flatten(start_dim=2).norm(dim=-1)
+            D[i:i + chunk_size] = self.generator_norm_squared(x_1[i:i + chunk_size, None], a, w).clamp_min(0.0).sqrt()
         return D
 
     @torch.no_grad()
@@ -117,8 +128,8 @@ class _Space(ABC):
             `x_1`: samples of shape [B, b, ...].
             `x_2`: samples of shape [B, b, ...].
           Optional:
-            `w`: weights of the components of the generator, as in
-            `LogarithmicDistance`. Defaults to all ones.
+            `w`: weights of the generator, as in `generator_norm_squared`.
+            Defaults to all ones.
         """
         return torch.stack(
             [self.distance_matrix(a, b, w, chunk_size=len(a)) ** 2 for a, b in zip(x_1, x_2)]
@@ -711,7 +722,7 @@ class SO3(MatrixGroup):
     Special orthogonal group of rotations on R^3.
     """
 
-    def __init__(self, device: str | torch.DeviceObjType = "cpu"):
+    def __init__(self, device: str | torch.DeviceObjType = "cpu", dtype: torch.dtype = torch.float32):
         super().__init__(
             dim=3,
             mat_dim=3 * 3,
@@ -732,7 +743,7 @@ class SO3(MatrixGroup):
                         [1.0, 0.0, 0.0],
                         [0.0, 0.0, 0.0],
                     ],
-                ], device=device
+                ], device=device, dtype=dtype
             ),
         )
 
@@ -808,7 +819,7 @@ class SO3(MatrixGroup):
         """
         if w is not None and not bool((w == w[0]).all()):
             return super().cost_matrices(R_1, R_2, w)
-        traces = R_1.flatten(-2) @ R_2.flatten(-2).transpose(-1, -2)
+        traces = _gram(R_1.flatten(-2), R_2.flatten(-2))
         C = torch.arccos(((traces - 1) / 2).clamp(-1, 1)) ** 2
         return C if w is None else w[0] ** 2 * C
 
@@ -821,7 +832,7 @@ class SE3(MatrixGroup):
     Special euclidean group of roto-translations on R^3.
     """
 
-    def __init__(self, device: str | torch.DeviceObjType = "cpu"):
+    def __init__(self, device: str | torch.DeviceObjType = "cpu", dtype: torch.dtype = torch.float32):
         super().__init__(
             dim=6,
             mat_dim=4 * 4,
@@ -863,10 +874,10 @@ class SE3(MatrixGroup):
                         [0.0, 0.0, 0.0, 0.0],
                         [0.0, 0.0, 0.0, 0.0],
                     ],
-                ], device=device
+                ], device=device, dtype=dtype
             ),
         )
-        self.so3 = SO3(device=device)
+        self.so3 = SO3(device=device, dtype=dtype)
 
     def log(self, g, ε_stab=0.001):
         """
@@ -952,7 +963,7 @@ class SOplus12(MatrixGroup):
     Orthochronous Lorentz group on R^{1, 2}.
     """
 
-    def __init__(self, device: str | torch.DeviceObjType = "cpu"):
+    def __init__(self, device: str | torch.DeviceObjType = "cpu", dtype: torch.dtype = torch.float32):
         super().__init__(
             dim=3,
             mat_dim=3 * 3,
@@ -973,7 +984,7 @@ class SOplus12(MatrixGroup):
                         [-1.0, 0.0, 0.0],
                         [0.0, 0.0, 0.0],
                     ],
-                ], device=device
+                ], device=device, dtype=dtype
             ),
         )
         self.η = torch.tensor(
@@ -981,7 +992,7 @@ class SOplus12(MatrixGroup):
                 [1.0, 0.0, 0.0],
                 [0.0, -1.0, 0.0],
                 [0.0, 0.0, -1.0],
-            ], device=device
+            ], device=device, dtype=dtype
         )
 
     def log(self, Λ, ε_stab=0.001, ε_π=1.5):
@@ -1069,7 +1080,7 @@ class SEplus12(MatrixGroup):
     Orthochronous Poincaré group on R^{1,2}.
     """
 
-    def __init__(self, device: str | torch.DeviceObjType = "cpu"):
+    def __init__(self, device: str | torch.DeviceObjType = "cpu", dtype: torch.dtype = torch.float32):
         super().__init__(
             dim=6,
             mat_dim=4 * 4,
@@ -1111,10 +1122,10 @@ class SEplus12(MatrixGroup):
                         [0.0, 0.0, 0.0, 0.0],
                         [0.0, 0.0, 0.0, 0.0],
                     ],
-                ], device=device
+                ], device=device, dtype=dtype
             ),
         )
-        self.soplus12 = SOplus12(device=device)
+        self.soplus12 = SOplus12(device=device, dtype=dtype)
         self.η = self.soplus12.η
 
     def log(self, g, ε_stab=0.001):
@@ -1284,8 +1295,8 @@ class M3(HomogeneousSpace):
     Position-Orientation space on 3D Euclidean space.
     """
 
-    def __init__(self, generator: Literal["mav", "pure_rotation"] | float = "mav", device: str | torch.DeviceObjType = "cpu"):
-        self.se3 = SE3(device=device)
+    def __init__(self, generator: Literal["mav", "pure_rotation"] | float = "mav", device: str | torch.DeviceObjType = "cpu", dtype: torch.dtype = torch.float32):
+        self.se3 = SE3(device=device, dtype=dtype)
         super().__init__(G=self.se3, mat_dim=4 * 2)
         self.generator = generator
 
@@ -1324,6 +1335,17 @@ class M3(HomogeneousSpace):
 
         k0 = (cross_n / sinθ).nan_to_num()
         k0 = k0 * ~parallel + torch.zeros_like(k0) * parallel
+        # Near θ = π, k0 is ill-conditioned, and at θ = π any axis orthogonal
+        # to n_1 works. The part of x_diff orthogonal to n_1 gives an
+        # equivariant choice; if it vanishes, no equivariant choice exists, and
+        # a uniformly random axis is equivariant in distribution.
+        antiparallel = θ > torch.pi - ε_stab
+        if antiparallel.any():
+            x_diff_perp = x_diff - (n_1 * x_diff).sum(-1, keepdim=True) * n_1
+            k_random = torch.randn(*shape, 3, device=device, dtype=p_2.dtype)
+            k_random = k_random - (n_1 * k_random).sum(-1, keepdim=True) * n_1
+            k_anti = torch.where(x_diff_perp.norm(dim=-1, keepdim=True) < ε_stab, k_random, x_diff_perp)
+            k0 = torch.where(antiparallel, k_anti / k_anti.norm(dim=-1, keepdim=True), k0)
         use_mav = x_diff.norm(dim=-1, keepdim=True) < ε_stab
         x_perp = (k0 * x_diff).sum(-1, keepdim=True) * k0
         x_par = x_diff - x_perp
@@ -1383,65 +1405,82 @@ class M3(HomogeneousSpace):
             * ~parallel[..., None],
         )
 
+    def generator_norm_squared(self, p, a, w=None):
+        """
+        Squared norm `||a||_p^2` at `p = (x, n)` of the generator components
+        `a = (v, ω)`, which is invariant under roto-translations. It is the
+        norm of the velocity `u = v + ω x x` of the position `x`, and of the
+        angular velocity `ω`, both split along and across `n`:
+          `||a||_p^2 = w_main^2 (u . n)^2 + w_lateral^2 |u_⊥|^2
+                       + w_spin^2 (ω . n)^2 + w_tilt^2 |ω_⊥|^2`,
+        with `w = (w_main, w_lateral, w_spin, w_tilt)`, defaulting to all ones.
+        """
+        x, n = self.get_position_orientation(p)
+        v, ω = a[..., :3], a[..., 3:]
+        u = v + cross_product(ω, x)
+        u_n, ω_n = (u * n).sum(-1), (ω * n).sum(-1)
+        w_main, w_lateral, w_spin, w_tilt = (1.0, 1.0, 1.0, 1.0) if w is None else w
+        return (
+            w_main**2 * u_n**2
+            + w_lateral**2 * ((u**2).sum(-1) - u_n**2)
+            + w_spin**2 * ω_n**2
+            + w_tilt**2 * ((ω**2).sum(-1) - ω_n**2)
+        )
+
     @torch.no_grad()
     def cost_matrices(self, p_1, p_2, w=None, ε_stab=0.001):
         """
         Compute the squared logarithmic distances between all pairs within
         blocks, `C[k, i, j] = ρ(p_1[k, i], p_2[k, j])^2`.
-
-        For the `mav` generator with weights `w_t` for all translational and
-        `w_r` for all rotational components, this only needs inner products of
-        the samples, i.e. matrix multiplications. With `cos(θ) = n_1 . n_2`,
-        `k = n_1 x n_2 / sin(θ)`, `h = θ / 2 cot(θ / 2)`, `Δx = x_2 - x_1`, and
-        `x_m = (x_1 + x_2) / 2`, the generator has rotational part `θ k` and
-        translational part `(k . Δx) k + h (Δx - (k . Δx) k) - θ k x x_m`, so
-          `ρ^2 = w_r^2 θ^2 + w_t^2 ((k . Δx)^2 + h^2 (|Δx|^2 - (k . Δx)^2)
-                 + θ^2 (|x_m|^2 - (k . x_m)^2) - 2 h θ k . (x_1 x x_2))`,
-        where `sin(θ) k . x_2 = n_1 . (n_2 x x_2)`,
-        `sin(θ) k . x_1 = (x_1 x n_1) . n_2`, and
-        `sin(θ) k . (x_1 x x_2) = (n_1 . x_1) (n_2 . x_2) - (n_1 . x_2) (x_1 . n_2)`.
-        Near `θ = 0`, `sin(θ)` loses precision, so a few nearly parallel pairs
-        have a slightly inaccurate cost; it is meant for couplings, use
-        `distance_matrix` for metrics.
         """
-        w_t, w_r = (1.0, 1.0) if w is None else (w[0], w[3])
-        if self.generator != "mav" or (
-            w is not None and not bool((w[:3] == w_t).all() and (w[3:] == w_r).all())
-        ):
+        if self.generator not in ("mav", "pure_rotation"):
             return super().cost_matrices(p_1, p_2, w)
+        w_main, w_lateral, w_spin, w_tilt = (1.0, 1.0, 1.0, 1.0) if w is None else w
         x_1, n_1 = self.get_position_orientation(p_1)
         x_2, n_2 = self.get_position_orientation(p_2)
-        inner = lambda a, b: a @ b.transpose(-1, -2)
+        # The cost is translation invariant, and centring the blocks reduces cancellation in the inner products.
+        centre = (x_1.mean(-2, keepdim=True) + x_2.mean(-2, keepdim=True)) / 2.0
+        x_1, x_2 = x_1 - centre, x_2 - centre
 
-        cosθ = inner(n_1, n_2).clamp(-1.0, 1.0)
-        sinθ = (1.0 - cosθ**2).clamp_min(0.0).sqrt()
-        θ = torch.atan2(sinθ, cosθ)
-        parallel = θ < ε_stab
-        sinθ = torch.where(parallel, 1.0, sinθ)
-        k_x_2 = inner(n_1, cross_product(n_2, x_2)) / sinθ
-        k_x_1 = inner(cross_product(x_1, n_1), n_2) / sinθ
-        k_x_1_x_2 = (
-            (n_1 * x_1).sum(-1)[..., :, None] * (n_2 * x_2).sum(-1)[..., None, :]
-            - inner(n_1, x_2) * inner(x_1, n_2)
-        ) / sinθ
-        k_Δx = k_x_2 - k_x_1
-        k_x_m = (k_x_1 + k_x_2) / 2.0
+        cosα = _gram(n_1, n_2).clamp(-1.0, 1.0)
+        α = cosα.arccos()
+        n_1_Δx = _gram(n_1, x_2) - _dot(n_1, x_1)
+        n_2_Δx = _dot(n_2, x_2).mT - _gram(x_1, n_2)
+        Δx_squared = _dot(x_1, x_1) + _dot(x_2, x_2).mT - 2.0 * _gram(x_1, x_2)
+        T = _gram(n_1, cross_product(n_2, x_2)) - _gram(cross_product(x_1, n_1), n_2)
 
-        x_1_x_2 = inner(x_1, x_2)
-        x_1_squared = (x_1**2).sum(-1)[..., :, None]
-        x_2_squared = (x_2**2).sum(-1)[..., None, :]
-        Δx_squared = x_1_squared + x_2_squared - 2.0 * x_1_x_2
-        x_m_squared = (x_1_squared + x_2_squared + 2.0 * x_1_x_2) / 4.0
+        def cost(u_n, u_squared, ω_n_squared, ω_squared):
+            return (
+                w_main**2 * u_n**2
+                + w_lateral**2 * (u_squared - u_n**2)
+                + w_spin**2 * ω_n_squared
+                + w_tilt**2 * (ω_squared - ω_n_squared)
+            )
 
-        h = torch.where(parallel, 1.0, (θ / 2.0) * _cotan(torch.where(parallel, 1.0, θ / 2.0)))
-        v_squared = (
-            k_Δx**2
-            + h**2 * (Δx_squared - k_Δx**2)
-            + θ**2 * (x_m_squared - k_x_m**2)
-            - 2.0 * h * θ * k_x_1_x_2
-        )
-        C = torch.where(parallel, w_t**2 * Δx_squared, w_t**2 * v_squared + w_r**2 * θ**2)
-        return C.clamp_min(0.0)
+        # For nearly parallel pairs, `get_generator` translates.
+        C = torch.where(α < ε_stab, cost(n_1_Δx, Δx_squared, 0.0, 0.0), 0.0)
+
+        # `k` is ill-conditioned for (anti)parallel pairs, so clamp `sin(α)`.
+        sinα = α.sin().clamp_min(math.sin(ε_stab))
+        antiparallel = α > math.pi - ε_stab
+        k_Δx_squared = torch.where(antiparallel, Δx_squared - n_1_Δx**2, (T / sinα) ** 2)
+        u_n = (α / 2.0).cos() / _sinc(α / 2.0) * n_1_Δx - ~antiparallel * (α / 2.0) * (cosα * n_1_Δx - n_2_Δx) / sinα
+        u_squared = k_Δx_squared + (Δx_squared - k_Δx_squared) / _sinc(α / 2.0) ** 2
+        C_mav = cost(u_n, u_squared, 0.0, α**2)
+        if self.generator == "mav":
+            return torch.where(α < ε_stab, C, C_mav).clamp_min(0.0)
+
+        # For `pure_rotation`, `get_generator` uses `mav` if `Δx` is small. If
+        # `Δx` is parallel to `d`, the axis is not unique, and the cost is not
+        # meaningful.
+        d_Δx = n_2_Δx - n_1_Δx
+        q = (2.0 * (1.0 - cosα) * Δx_squared - d_Δx**2).clamp_min(0.0).sqrt().clamp_min(ε_stab**2)
+        k_n_1 = -T / q
+        θ = torch.atan2((1.0 - cosα) * (n_1_Δx + n_2_Δx) / q, cosα - k_n_1**2)
+        u_n = (θ / 2.0).cos() / _sinc(θ / 2.0) * n_1_Δx - (θ / 2.0) * ((cosα - 1.0) * Δx_squared - n_1_Δx * d_Δx) / q
+        C_pure = cost(u_n, Δx_squared / _sinc(θ / 2.0) ** 2, (θ * k_n_1) ** 2, θ**2)
+        C_rot = torch.where(Δx_squared < ε_stab**2, C_mav, C_pure)
+        return torch.where(α < ε_stab, C, C_rot).clamp_min(0.0)
 
     def get_position_orientation(self, p):
         x = p[..., :3, -2]
@@ -1470,8 +1509,9 @@ class P3(HomogeneousSpace):
         self,
         generator: Literal["timelike", "lightlike", "spacelike"] | float = "spacelike",
         device: str | torch.DeviceObjType = "cpu",
+        dtype: torch.dtype = torch.float32,
     ):
-        self.seplus12 = SEplus12(device=device)
+        self.seplus12 = SEplus12(device=device, dtype=dtype)
         self.η = self.seplus12.η
         super().__init__(G=self.seplus12, mat_dim=4 * 2)
         self.generator = generator
@@ -1598,66 +1638,72 @@ class P3(HomogeneousSpace):
             ω,
         )
 
+    def generator_norm_squared(self, p, a, w=None):
+        """
+        Squared norm `||a||_p^2` at `p = (x, n)` of the generator components
+        `a = (v, k)`, which is invariant under Poincaré transformations. With
+        the Minkowski inner product `<a, b> = a^T η b`, it is the norm of the
+        velocity `u = v + k x_η x` of the event `x`, and of the Lorentz part
+        `k`, both split along and across `n`, using that `<n, n> = 1` and that
+        `-<., .>` is positive definite on the orthogonal complement of `n`:
+          `||a||_p^2 = w_time^2 <u, n>^2 + w_space^2 (<u, n>^2 - <u, u>)
+                       + w_rotation^2 <k, n>^2 + w_boost^2 (<k, n>^2 - <k, k>)`,
+        with `w = (w_time, w_space, w_rotation, w_boost)`, defaulting to all ones.
+        """
+        x, n = self.get_event_velocity(p)
+        v, k = a[..., :3], a[..., 3:]
+        u = v + hyperbolic_cross_product(k, x)
+        η = self.η.diagonal()
+        u_n, k_n = (u * η * n).sum(-1), (k * η * n).sum(-1)
+        w_time, w_space, w_rotation, w_boost = (1.0, 1.0, 1.0, 1.0) if w is None else w
+        return (
+            w_time**2 * u_n**2
+            + w_space**2 * (u_n**2 - (u * η * u).sum(-1))
+            + w_rotation**2 * k_n**2
+            + w_boost**2 * (k_n**2 - (k * η * k).sum(-1))
+        )
+
     @torch.no_grad()
     def cost_matrices(self, p_1, p_2, w=None, ε_stab=1e-2):
         """
         Compute the squared logarithmic distances between all pairs within
         blocks, `C[k, i, j] = ρ(p_1[k, i], p_2[k, j])^2`.
 
-        For the `spacelike` generator with weights `w_t` for all translational
-        and `w_r` for all Lorentz components, this only needs inner products of
-        the samples, i.e. matrix multiplications. Write `u = n_1 x n_2` for the
-        Euclidean cross product, so that the hyperbolic cross product is
-        `n_1 x_η n_2 = η u`, and `s^2 = -u^T η u`, `w = asinh(s)`,
-        `α = w / s`, `β = w / 2 coth(w / 2) - 1`, `γ = β / s^2`,
-        `Δx = x_2 - x_1`, `x_m = (x_1 + x_2) / 2`, `p = u . Δx`. Then the
-        generator has Lorentz part `α η u` and translational part
-        `v = (1 + β) Δx - α Q + γ p η u` with `Q = u x η x_m`. Since
+        For the `spacelike` generator, this only needs inner products of the
+        samples, i.e. matrix multiplications. Write `<a, b> = a^T η b`,
+        `u = n_1 x n_2` for the Euclidean cross product, so that the hyperbolic
+        cross product is `n_1 x_η n_2 = η u`, `s^2 = -<u, u> = <n_1, n_2>^2 - 1`,
+        `w = asinh(s)`, `α = w / s`, `β = w / 2 coth(w / 2) - 1`, `γ = β / s^2`,
+        `Δx = x_2 - x_1`, and `p = u . Δx`. Then the generator has Lorentz part
+        `k = α η u`, with `<k, n_1> = 0` and `<k, k> = -α^2 s^2`, and the velocity
+        of `x_1` is `(1 + β) Δx - α / 2 u x η Δx + γ p η u`. Since
         `η = diag(1, -1, -1)` is a rotation, `η a . η b = a . b` and
-        `η (a x b) = η a x η b`, so all inner products of `Δx`, `Q`, and `η u`
-        reduce to inner products of the samples by
-        `(a x b) . (c x d) = (a . c) (b . d) - (a . d) (b . c)`, e.g.
-        `Q . η u = -2 u_t u . (e_t x η x_m)` using `u x η u = 2 u_t u x e_t`.
-        Expanding the squares loses relative precision for very close pairs
-        (absolute error ~1e-3 in single precision); it is meant for couplings,
-        use `distance_matrix` for metrics.
+        `η (a x b) = η a x η b`, so its inner products reduce to inner products
+        of the samples by `(a x b) . (c x d) = (a . c) (b . d) - (a . d) (b . c)`:
+        `<u x η Δx, u x η Δx> = -s^2 <Δx, Δx> - p^2`,
+        `<u x η Δx, n_1> = <n_1, n_2> <n_1, Δx> - <n_2, Δx>`, `<Δx, η u> = p`,
+        and the others vanish. Expanding the squares loses relative precision
+        for very close pairs; it is meant for couplings, use `distance_matrix`
+        for metrics.
         """
-        w_t, w_r = (1.0, 1.0) if w is None else (w[0], w[3])
-        if self.generator != "spacelike" or (
-            w is not None and not bool((w[:3] == w_t).all() and (w[3:] == w_r).all())
-        ):
+        if self.generator != "spacelike":
             return super().cost_matrices(p_1, p_2, w)
+        w_time, w_space, w_rotation, w_boost = (1.0, 1.0, 1.0, 1.0) if w is None else w
         x_1, n_1 = self.get_event_velocity(p_1)
         x_2, n_2 = self.get_event_velocity(p_2)
-        η = self.η.diagonal().to(x_1.dtype)
-        e_t = torch.zeros_like(n_2)
-        e_t[..., 0] = 1.0
-        inner = lambda a, b: a @ b.transpose(-1, -2)
-        inner_1 = lambda a, b: (a * b).sum(-1)[..., :, None]  # of sample 1, along rows
-        inner_2 = lambda a, b: (a * b).sum(-1)[..., None, :]  # of sample 2, along columns
-        # u . y_1 = n_2 . (y_1 x n_1), u . y_2 = n_1 . (n_2 x y_2)
-        u_dot_1 = lambda y_1: inner(cross_product(y_1, n_1), n_2)
-        u_dot_2 = lambda y_2: inner(n_1, cross_product(n_2, y_2))
+        # The cost is translation invariant, and centring the blocks reduces cancellation in the inner products.
+        centre = (x_1.mean(-2, keepdim=True) + x_2.mean(-2, keepdim=True)) / 2.0
+        x_1, x_2 = x_1 - centre, x_2 - centre
+        η = self.η.diagonal()
 
-        u_squared = inner_1(n_1, n_1) * inner_2(n_2, n_2) - inner(n_1, n_2) ** 2
-        u_t = u_dot_2(e_t)
-        s_squared = (u_squared - 2.0 * u_t**2).clamp_min(0.0)
-        p = u_dot_2(x_2) - u_dot_1(x_1)
-        u_ηx_m = (u_dot_1(η * x_1) + u_dot_2(η * x_2)) / 2.0
-
-        x_1_x_2 = inner(x_1, x_2)
-        x_1_squared, x_2_squared = inner_1(x_1, x_1), inner_2(x_2, x_2)
-        Δx_squared = x_1_squared + x_2_squared - 2.0 * x_1_x_2
-        x_m_squared = (x_1_squared + x_2_squared + 2.0 * x_1_x_2) / 4.0
-        n_1_ηx_m = (inner_1(n_1, η * x_1) + inner(n_1, η * x_2)) / 2.0
-        n_2_ηx_m = (inner(η * x_1, n_2) + inner_2(n_2, η * x_2)) / 2.0
-        n_1_Δx = inner(n_1, x_2) - inner_1(n_1, x_1)
-        n_2_Δx = inner_2(n_2, x_2) - inner(x_1, n_2)
-
-        Q_Q = u_squared * x_m_squared - u_ηx_m**2
-        Δx_Q = n_1_ηx_m * n_2_Δx - n_1_Δx * n_2_ηx_m
-        Δx_ηu = u_dot_2(η * x_2) - u_dot_1(η * x_1)
-        Q_ηu = -2.0 * u_t * (inner_1(n_1, e_t) * n_2_ηx_m - n_1_ηx_m * inner_2(n_2, e_t))
+        n_1_n_1, n_2_n_2 = _dot(n_1, η * n_1), _dot(n_2, η * n_2).mT
+        n_1_n_2 = _gram(n_1, η * n_2)
+        n_1_Δx = _gram(n_1, η * x_2) - _dot(n_1, η * x_1)
+        n_2_Δx = _dot(n_2, η * x_2).mT - _gram(η * x_1, n_2)
+        Δx_Δx = _dot(x_1, η * x_1) + _dot(x_2, η * x_2).mT - 2.0 * _gram(x_1, η * x_2)
+        # u . x_1 = (x_1 x n_1) . n_2 and u . x_2 = n_1 . (n_2 x x_2).
+        p = _gram(n_1, cross_product(n_2, x_2)) - _gram(cross_product(x_1, n_1), n_2)
+        s_squared = (n_1_n_2**2 - n_1_n_1 * n_2_n_2).clamp_min(0.0)
 
         # Series for small s, as in `get_generator`.
         s = s_squared.sqrt()
@@ -1668,16 +1714,11 @@ class P3(HomogeneousSpace):
         β = torch.where(small, w_**2 / 12.0 - w_**4 / 720.0, (w_safe / 2.0) / torch.tanh(w_safe / 2.0) - 1.0)
         γ = torch.where(small, (1.0 / 12.0 - w_**2 / 720.0) * α**2, β / torch.where(small, 1.0, s_squared))
 
-        a, b, c = 1.0 + β, -α, γ * p
-        v_squared = (
-            a**2 * Δx_squared
-            + b**2 * Q_Q
-            + c**2 * u_squared
-            + 2.0 * a * b * Δx_Q
-            + 2.0 * a * c * Δx_ηu
-            + 2.0 * b * c * Q_ηu
-        )
-        return (w_t**2 * v_squared + w_r**2 * α**2 * u_squared).clamp_min(0.0)
+        a, b, c = 1.0 + β, -α / 2.0, γ * p
+        u_n = a * n_1_Δx + b * (n_1_n_2 * n_1_Δx - n_1_n_1 * n_2_Δx)
+        u_u = a**2 * Δx_Δx - b**2 * (s_squared * Δx_Δx + p**2) - c**2 * s_squared + 2.0 * a * c * p
+        C = w_time**2 * u_n**2 + w_space**2 * (u_n**2 - u_u) + w_boost**2 * α**2 * s_squared
+        return C.clamp_min(0.0)
 
     def get_event_velocity(self, p):
         x = p[..., :3, -2]
@@ -1719,6 +1760,16 @@ def _expc(x: torch.Tensor) -> torch.Tensor:
 def cross_product(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
     shape = torch.broadcast_shapes(x.shape, y.shape)
     return torch.linalg.cross(x.expand(shape), y.expand(shape))
+
+
+def _gram(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+    """Compute the pairwise inner products `G[..., i, j] = a[..., i, :] . b[..., j, :]`."""
+    return a @ b.mT
+
+
+def _dot(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+    """Compute the row-wise inner products `d[..., i, 0] = a[..., i, :] . b[..., i, :]`."""
+    return (a * b).sum(-1, keepdim=True)
 
 
 def hyperbolic_cross_product(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
@@ -1852,6 +1903,13 @@ class PowerSpace(_Space):
         """
         return self.G.flow(x, a, t)
 
+    def generator_norm_squared(self, x, a, w=None):
+        """
+        Squared norm of the generator components `a` at `x`, the sum of the
+        squared norms of the factors.
+        """
+        return self.G.generator_norm_squared(x, a, w).sum(-1)
+
     @torch.no_grad()
     def distance_matrix(
         self,
@@ -1870,10 +1928,9 @@ class PowerSpace(_Space):
             return super().distance_matrix(x_1, x_2, w, chunk_size)
         D_squared = []
         for i in range(0, len(x_1), chunk_size):
-            A = self.generator_components(x_1[i:i + chunk_size, None, :, None], x_2[None, :, None])
-            if w is not None:
-                A = w * A
-            C = (A**2).sum(-1).cpu().numpy()
+            x_1_chunk = x_1[i:i + chunk_size, None, :, None]
+            A = self.generator_components(x_1_chunk, x_2[None, :, None])
+            C = self.G.generator_norm_squared(x_1_chunk, A, w).cpu().numpy()
             for c in C.reshape(-1, *C.shape[2:]):
                 rows, cols = linear_sum_assignment(c)
                 D_squared.append(c[rows, cols].sum())

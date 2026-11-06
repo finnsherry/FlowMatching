@@ -172,7 +172,7 @@ class FlowField(nn.Module):
                 x_t.split(batch_size), t.split(batch_size), target.split(batch_size)
             ):
                 optimizer.zero_grad()
-                batch_loss = loss(self(x_t_batch, t_batch), target_batch)
+                batch_loss = loss(x_t_batch, self(x_t_batch, t_batch), target_batch)
                 losses[i] = float(batch_loss.cpu().item())
                 batch_loss.backward()
                 optimizer.step()
@@ -215,8 +215,8 @@ class FlowField(nn.Module):
             `x_0`: initial samples of shape [N, ...].
             `x_1`: target samples of shape [N, ...].
           Optional:
-            `w`: weights of the components of the generator, as in
-            `LogarithmicDistance`. Defaults to all ones.
+            `w`: weights of the generator, as in the space's
+            `generator_norm_squared`. Defaults to all ones.
             `N_steps`: number of integration steps. Defaults to 120.
             `method`: integration method, `"euler"` or `"heun"`. Defaults to
             `"heun"`.
@@ -333,19 +333,23 @@ class ResidualBlock(nn.Module):
 
 class LogarithmicDistance(nn.Module):
     """
-    Flow matching loss: the mean squared difference of the components of the
-    predicted and target generators, weighted by `w**2`.
+    Flow matching loss: the squared norm `space.generator_norm_squared` at the
+    points `x_t` of the difference of the predicted and target generators,
+    weighted by `w`, averaged over the samples and divided by the number of
+    components. For groups, this is the mean of the squared differences of the
+    components weighted by `w**2`.
     """
 
-    def __init__(self, w: torch.Tensor):
+    def __init__(self, space: Group | MatrixGroup | HomogeneousSpace | PowerSpace, w: torch.Tensor | None = None):
         super().__init__()
+        self.space = space
         self.w = w
 
-    def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-        return (self.w**2 * (target - pred) ** 2).mean()
+    def forward(self, x_t: torch.Tensor, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        return self.space.generator_norm_squared(x_t, target - pred, self.w).mean() / self.space.generator_dim
 
     def __repr__(self):
-        return f"LogarithmicDistance{tuple(self.w.tolist())}"
+        return f"LogarithmicDistance{() if self.w is None else tuple(self.w.tolist())}"
 
 
 class DataGenerator:
@@ -408,8 +412,8 @@ class OTCoupling:
     Args:
         `G`: group or homogeneous space with a method `cost_matrices`.
       Optional:
-        `w`: weights of the components of the generator, as in
-          `LogarithmicDistance`. Defaults to all ones.
+        `w`: weights of the generator, as in the space's
+          `generator_norm_squared`. Defaults to all ones.
         `block_size`: number of samples that are coupled together. Defaults to
           128.
         `reg`: entropic regularisation, relative to the mean cost of the block.
