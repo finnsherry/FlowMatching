@@ -18,7 +18,9 @@
             1.0,
             1.0
         ],
-        "normals_to_circle": {}
+        "normals_to_circle": {
+            "N_steps": 60
+        }
     },
     "R2_n": {
         "batch_size": 256,
