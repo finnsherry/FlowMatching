@@ -246,7 +246,6 @@ def _transformer(
     """
     return nn.Sequential(
         nn.Linear(in_dim, embed_dim),
-        # The same block L times, so the blocks share their weights.
         *(L * [EncoderBlock(embed_dim, num_heads, expansion)]),
         nn.Linear(embed_dim, out_dim),
     )
@@ -296,7 +295,6 @@ def _mlp(
     """
     return nn.Sequential(
         nn.Linear(in_dim, H),
-        # The same block L times, so the blocks share their weights.
         *(L * [ResidualBlock(H)]),
         nn.LayerNorm(H),
         nn.ReLU(),
@@ -359,8 +357,8 @@ class DataGenerator:
     `batches_per_block` batches at once, which is much faster for small batches:
     `blocks` yields these blocks, iterating yields single batches.
 
-    Optionally, `coupling`, e.g. an `OTCoupling`, re-pairs the targets to the
-    sources within each batch; by default, sources and targets are independent.
+    Optionally, `coupling`, e.g. an `OTCoupling`, re-pairs the sources to the
+    targets within each batch; by default, sources and targets are independent.
     """
     def __init__(
         self,
@@ -369,7 +367,7 @@ class DataGenerator:
         batch_size,
         batches_per_epoch,
         batches_per_block=16,
-        coupling=None,
+        coupling: OTCoupling | None = None,
     ):
         self.generate_g_0 = generate_g_0
         self.generate_g_1 = generate_g_1
@@ -385,14 +383,13 @@ class DataGenerator:
     def __len__(self):
         return self.batches_per_epoch
 
-    def blocks(self):
+    def blocks(self) -> tuple[torch.Tensor, torch.Tensor, int]:
         """Yield blocks `(g_0, g_1, batch_size)` of several batches."""
         for start in range(0, self.batches_per_epoch, self.batches_per_block):
             N = min(self.batches_per_block, self.batches_per_epoch - start) * self.batch_size
             g_0, g_1 = self.generate_g_0(N), self.generate_g_1(N)
             if self.coupling is not None:
-                # The coupling's blocks divide the batches, so this pairs within batches.
-                g_1 = self.coupling(g_0, g_1)
+                g_0 = self.coupling(g_0, g_1)
             yield g_0, g_1, self.batch_size
 
     def __iter__(self):
@@ -403,12 +400,15 @@ class DataGenerator:
 class OTCoupling:
     """
     Mini-batch optimal transport coupling.[1, 2] Within consecutive blocks of
-    `block_size` samples, the targets are re-paired to the sources according to
+    `block_size` samples, the sources are re-paired to the targets according to
     the entropic optimal transport plan for the cost `G.cost_matrices`, the
     squared logarithmic distance, which is the kinetic energy of the
-    exponential curve from source to target: the partner of each source is
+    exponential curve from source to target: the partner of each target is
     drawn from its row of the plan. This makes the exponential curves cross
-    less, so that the flow field is easier to learn and to integrate.
+    less, so that the flow field is easier to learn and to integrate. Since the
+    partners are drawn independently, a source may be used several times or
+    not at all, while every target is used exactly once: this way, no data are
+    lost, and sources are cheap to draw anyway.
 
     Args:
         `G`: group or homogeneous space with a method `cost_matrices`.
@@ -432,7 +432,7 @@ class OTCoupling:
           (2023). DOI:10.48550/arXiv.2304.14772.
     """
 
-    def __init__(self, G, w=None, block_size=128, reg=0.05, iters=50):
+    def __init__(self, G: Space, w=None, block_size=128, reg=0.05, iters=50):
         self.G = G
         self.w = w
         self.block_size = block_size
@@ -441,16 +441,14 @@ class OTCoupling:
 
     @torch.no_grad()
     def __call__(self, g_0: torch.Tensor, g_1: torch.Tensor) -> torch.Tensor:
-        """Return the targets `g_1` re-paired to the sources `g_0`."""
+        """Return the sources `g_0` re-paired to the targets `g_1`."""
         B, b = len(g_0) // self.block_size, self.block_size
         C = self.G.cost_matrices(g_0.view(B, b, *g_0.shape[1:]), g_1.view(B, b, *g_1.shape[1:]), self.w)
-        P = _sinkhorn(C, self.reg, self.iters).flatten(0, 1)
-        # Inverse transform sampling, much faster than `torch.multinomial` for many short rows: the partner of
-        # source i is the first j where the cumulative sum of row i exceeds a uniform draw from [0, row sum).
+        P = _sinkhorn(C.transpose(-1, -2), self.reg, self.iters).flatten(0, 1)
         cumulative = P.cumsum(-1)
         u = torch.rand(len(P), 1, dtype=P.dtype, device=P.device) * cumulative[:, -1:]
         j = torch.searchsorted(cumulative, u, right=True).clamp_max(b - 1).view(B, b)
-        return g_1[(j + b * torch.arange(B, device=j.device)[:, None]).flatten()]
+        return g_0[(j + b * torch.arange(B, device=j.device)[:, None]).flatten()]
 
 
 def _sinkhorn(C, reg, iters):
