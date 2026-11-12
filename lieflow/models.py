@@ -23,7 +23,9 @@ References:
   DOI:10.1007/978-3-032-03918-7_4.
 """
 
+import numpy as np
 import torch
+from scipy.optimize import linear_sum_assignment
 from torch import nn
 from tqdm.auto import tqdm
 
@@ -400,15 +402,9 @@ class DataGenerator:
 class OTCoupling:
     """
     Mini-batch optimal transport coupling.[1, 2] Within consecutive blocks of
-    `block_size` samples, the sources are re-paired to the targets according to
-    the entropic optimal transport plan for the cost `G.cost_matrices`, the
-    squared logarithmic distance, which is the kinetic energy of the
-    exponential curve from source to target: the partner of each target is
-    drawn from its row of the plan. This makes the exponential curves cross
-    less, so that the flow field is easier to learn and to integrate. Since the
-    partners are drawn independently, a source may be used several times or
-    not at all, while every target is used exactly once: this way, no data are
-    lost, and sources are cheap to draw anyway.
+    `block_size` samples, the sources are re-paired to the targets by the exact
+    optimal assignment for the cost `G.cost_matrices`, the squared logarithmic
+    distance.
 
     Args:
         `G`: group or homogeneous space with a method `cost_matrices`.
@@ -417,9 +413,6 @@ class OTCoupling:
           `generator_norm_squared`. Defaults to all ones.
         `block_size`: number of samples that are coupled together. Defaults to
           128.
-        `reg`: entropic regularisation, relative to the mean cost of the block.
-          Defaults to 0.05.
-        `iters`: number of Sinkhorn iterations. Defaults to 50.
 
     References:
         [1]: A. Tong, K. Fatras, N. Malkin, G. Huguet, Y. Zhang, J. Rector-Brooks,
@@ -432,45 +425,18 @@ class OTCoupling:
           (2023). DOI:10.48550/arXiv.2304.14772.
     """
 
-    def __init__(self, G: Space, w=None, block_size=128, reg=0.05, iters=50):
+    def __init__(self, G: Space, w=None, block_size=128):
         self.G = G
         self.w = w
         self.block_size = block_size
-        self.reg = reg
-        self.iters = iters
 
     @torch.no_grad()
     def __call__(self, g_0: torch.Tensor, g_1: torch.Tensor) -> torch.Tensor:
         """Return the sources `g_0` re-paired to the targets `g_1`."""
         B, b = len(g_0) // self.block_size, self.block_size
         C = self.G.cost_matrices(g_0.view(B, b, *g_0.shape[1:]), g_1.view(B, b, *g_1.shape[1:]), self.w)
-        P = _sinkhorn(C.transpose(-1, -2), self.reg, self.iters).flatten(0, 1)
-        cumulative = P.cumsum(-1)
-        u = torch.rand(len(P), 1, dtype=P.dtype, device=P.device) * cumulative[:, -1:]
-        j = torch.searchsorted(cumulative, u, right=True).clamp_max(b - 1).view(B, b)
+        C = C.transpose(-1, -2).double().cpu()
+        finite = C.isfinite()
+        C = torch.where(finite, C, C[finite].max() if finite.any() else 0.0).numpy()
+        j = torch.from_numpy(np.stack([linear_sum_assignment(c)[1] for c in C])).to(g_0.device)
         return g_0[(j + b * torch.arange(B, device=j.device)[:, None]).flatten()]
-
-
-def _sinkhorn(C, reg, iters):
-    """
-    Entropic optimal transport plans with uniform marginals for the cost
-    matrices `C` [B, b, b], up to normalisation of the rows. The cost is
-    divided by `reg` times its mean, and shifted by its row minima, which the
-    scaling absorbs; if this still underflows, fall back to the log domain.
-    """
-    C = torch.nan_to_num(C, nan=0.0, posinf=0.0)
-    E = (C - C.amin(-1, keepdim=True)) / (reg * C.mean((-2, -1), keepdim=True).clamp_min(1e-12))
-    K = torch.exp(-E)
-    v = torch.ones(*K.shape[:-2], K.shape[-1], 1, dtype=K.dtype, device=K.device)
-    for _ in range(iters):
-        u = 1.0 / (K @ v)
-        v = 1.0 / (K.transpose(-1, -2) @ u)
-    P = u * K * v.transpose(-1, -2)
-    if torch.isfinite(P).all() and (P.sum(-1) > 0).all():
-        return P
-    f = torch.zeros(K.shape[:-1], dtype=K.dtype, device=K.device)
-    g = torch.zeros_like(f)
-    for _ in range(iters):
-        f = -torch.logsumexp(g[..., None, :] - E, -1)
-        g = -torch.logsumexp(f[..., :, None] - E, -2)
-    return torch.softmax(f[..., :, None] + g[..., None, :] - E, -1)

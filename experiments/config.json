@@ -86,7 +86,7 @@
             "N_steps": 960
         },
         "circle_to_circle": {
-            "batches_per_epoch": 320,
+            "batches_per_epoch": 640,
             "ot_block_size": 128,
             "N_steps": 480
         }
@@ -107,7 +107,7 @@
             "batches_per_epoch": 200
         },
         "circle_to_circle": {
-            "batches_per_epoch": 200,
+            "batches_per_epoch": 400,
             "ot_block_size": 128
         }
     },
