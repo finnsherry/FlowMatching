@@ -23,6 +23,8 @@ References:
   DOI:10.1007/978-3-032-03918-7_4.
 """
 
+from collections.abc import Iterator
+
 import numpy as np
 import torch
 from scipy.optimize import linear_sum_assignment
@@ -287,10 +289,6 @@ class EncoderBlock(nn.Module):
         x = self.ln1(A + x)
         return self.ln2(x + self.ff(x))
 
-    @property
-    def parameter_count(self):
-        return sum(p.numel() for p in self.parameters())
-
 
 def _mlp(
     in_dim: int,
@@ -331,10 +329,6 @@ class ResidualBlock(nn.Module):
     def forward(self, h: torch.Tensor) -> torch.Tensor:
         return h + self.linear(self.activation(self.norm(h)))
 
-    @property
-    def parameter_count(self):
-        return sum(p.numel() for p in self.parameters())
-
 
 class LogarithmicDistance(nn.Module):
     """
@@ -355,52 +349,6 @@ class LogarithmicDistance(nn.Module):
 
     def __repr__(self):
         return f"LogarithmicDistance{() if self.w is None else tuple(self.w.tolist())}"
-
-
-class DataGenerator:
-    """
-    Draws new pairs (g_0, g_1) for every batch. The samples are drawn for
-    `batches_per_block` batches at once, which is much faster for small batches:
-    `blocks` yields these blocks, iterating yields single batches.
-
-    Optionally, `coupling`, e.g. an `OTCoupling`, re-pairs the sources to the
-    targets within each batch; by default, sources and targets are independent.
-    """
-    def __init__(
-        self,
-        generate_g_0,
-        generate_g_1,
-        batch_size,
-        batches_per_epoch,
-        batches_per_block=16,
-        coupling: OTCoupling | None = None,
-    ):
-        self.generate_g_0 = generate_g_0
-        self.generate_g_1 = generate_g_1
-        self.batch_size = batch_size
-        self.batches_per_epoch = batches_per_epoch
-        self.batches_per_block = batches_per_block
-        self.coupling = coupling
-        if coupling is not None and batch_size % coupling.block_size != 0:
-            raise ValueError(
-                f"The batch size {batch_size} is not a multiple of the coupling's block size {coupling.block_size}!"
-            )
-
-    def __len__(self):
-        return self.batches_per_epoch
-
-    def blocks(self) -> tuple[torch.Tensor, torch.Tensor, int]:
-        """Yield blocks `(g_0, g_1, batch_size)` of several batches."""
-        for start in range(0, self.batches_per_epoch, self.batches_per_block):
-            N = min(self.batches_per_block, self.batches_per_epoch - start) * self.batch_size
-            g_0, g_1 = self.generate_g_0(N), self.generate_g_1(N)
-            if self.coupling is not None:
-                g_0 = self.coupling(g_0, g_1)
-            yield g_0, g_1, self.batch_size
-
-    def __iter__(self):
-        for g_0, g_1, batch_size in self.blocks():
-            yield from zip(g_0.split(batch_size), g_1.split(batch_size))
 
 
 class OTCoupling:
@@ -444,3 +392,50 @@ class OTCoupling:
         C = torch.where(finite, C, C[finite].max() if finite.any() else 0.0).numpy()
         j = torch.from_numpy(np.stack([linear_sum_assignment(c)[1] for c in C])).to(g_0.device)
         return g_0[(j + b * torch.arange(B, device=j.device)[:, None]).flatten()]
+
+
+class DataGenerator:
+    """
+    Draws new pairs (g_0, g_1) for every batch. The samples are drawn for
+    `batches_per_block` batches at once, which is much faster for small batches:
+    `blocks` yields these blocks, iterating yields single batches.
+
+    Optionally, `coupling`, e.g. an `OTCoupling`, re-pairs the sources to the
+    targets within each batch; by default, sources and targets are independent.
+    """
+
+    def __init__(
+        self,
+        generate_g_0,
+        generate_g_1,
+        batch_size,
+        batches_per_epoch,
+        batches_per_block=16,
+        coupling: OTCoupling | None = None,
+    ):
+        self.generate_g_0 = generate_g_0
+        self.generate_g_1 = generate_g_1
+        self.batch_size = batch_size
+        self.batches_per_epoch = batches_per_epoch
+        self.batches_per_block = batches_per_block
+        self.coupling = coupling
+        if coupling is not None and batch_size % coupling.block_size != 0:
+            raise ValueError(
+                f"The batch size {batch_size} is not a multiple of the coupling's block size {coupling.block_size}!"
+            )
+
+    def __len__(self):
+        return self.batches_per_epoch
+
+    def blocks(self) -> Iterator[tuple[torch.Tensor, torch.Tensor, int]]:
+        """Yield blocks `(g_0, g_1, batch_size)` of several batches."""
+        for start in range(0, self.batches_per_epoch, self.batches_per_block):
+            N = min(self.batches_per_block, self.batches_per_epoch - start) * self.batch_size
+            g_0, g_1 = self.generate_g_0(N), self.generate_g_1(N)
+            if self.coupling is not None:
+                g_0 = self.coupling(g_0, g_1)
+            yield g_0, g_1, self.batch_size
+
+    def __iter__(self):
+        for g_0, g_1, batch_size in self.blocks():
+            yield from zip(g_0.split(batch_size), g_1.split(batch_size))

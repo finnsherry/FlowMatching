@@ -40,9 +40,8 @@ def train_model(space, generate_0, generate_1, config, x_0s_eval, x_1s_eval, flo
     and plot the training curves against the `floor` of the metrics. Return the
     averaged model, and the loss and metrics per epoch.
     """
-    coupling = None if config["ot_block_size"] is None else OTCoupling(
-        space, torch.tensor(config["loss_weights"], device=device), config["ot_block_size"]
-    )
+    w = torch.tensor(config["loss_weights"], device=device)
+    coupling = None if config["ot_block_size"] is None else OTCoupling(space, w, config["ot_block_size"])
     train_loader = DataGenerator(generate_0, generate_1, config["batch_size"], config["batches_per_epoch"], coupling=coupling)
 
     transformer = {key: config[key] for key in ("embed_dim", "num_heads", "expansion") if key in config}
@@ -54,7 +53,7 @@ def train_model(space, generate_0, generate_1, config, x_0s_eval, x_1s_eval, flo
         optimizer_FM, T_max=config["epochs"] * config["batches_per_epoch"], eta_min=config["learning_rate_final"]
     )
     ema = AveragedModel(model_FM, multi_avg_fn=get_ema_multi_avg_fn(config["ema_decay"]))
-    loss = LogarithmicDistance(space, torch.tensor(config["loss_weights"], device=device))
+    loss = LogarithmicDistance(space, w)
 
     losses_FM = np.zeros(config["epochs"])
     metrics_FM = {key: np.zeros(config["epochs"]) for key in floor}

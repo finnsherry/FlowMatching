@@ -447,13 +447,11 @@ class Rn(Group):
     def cost_matrices(self, g_1, g_2, w=None):
         """
         Compute the squared (weighted) Euclidean distances between all pairs
-        within blocks, `C[k, i, j] = ||w * (g_2[k, j] - g_1[k, i])||^2`. Samples
-        in a power of the group, of shape [B, b, m, dim], use the product
-        distance.
+        within blocks, `C[k, i, j] = ||w * (g_2[k, j] - g_1[k, i])||^2`.
         """
         if w is not None:
             g_1, g_2 = w * g_1, w * g_2
-        return torch.cdist(g_1.flatten(2), g_2.flatten(2), compute_mode="donot_use_mm_for_euclid_dist") ** 2
+        return torch.cdist(g_1, g_2, compute_mode="donot_use_mm_for_euclid_dist") ** 2
 
     def __repr__(self):
         return f"R^{self.dim}"
