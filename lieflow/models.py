@@ -27,6 +27,7 @@ import numpy as np
 import torch
 from scipy.optimize import linear_sum_assignment
 from torch import nn
+from torch.nn import functional as F
 from tqdm.auto import tqdm
 
 from lieflow.groups import PowerSpace, Space
@@ -114,9 +115,7 @@ class FlowField(nn.Module):
         Take a step of size `Δt` from time `t`, with the explicit Euler method
         (`method="euler"`) or Heun's method (`method="heun"`): with `v_1` the
         velocity at `x_t` and `v_2` the velocity at the Euler prediction, follow
-        the exponential curve with the average `(v_1 + v_2) / 2`. Since the
-        exponential curves are exact for constant generators, this is
-        second-order accurate. Take a negative `Δt` to integrate backwards.
+        the exponential curve with the average `(v_1 + v_2) / 2`.
         """
         v = self.velocity(x_t, t)
         if method == "heun":
@@ -157,7 +156,6 @@ class FlowField(nn.Module):
         """
         self.train()
         N_batches = len(train_loader)
-        # Kept on the device, so that recording the losses does not synchronise every batch.
         losses = torch.zeros(N_batches, device=device)
         progress = (
             tqdm(total=N_batches, desc="Training", dynamic_ncols=True, unit="batch", leave=False)
@@ -262,10 +260,13 @@ class EncoderBlock(nn.Module):
         `num_heads`: number of heads in the multihead attention.
         `expansion`: expansion factor in the pointwise feedforward network.
     """
-    
+
     def __init__(self, embed_dim: int, num_heads: int, expansion: int):
         super().__init__()
-        self.attn = nn.MultiheadAttention(embed_dim, num_heads, batch_first=True)
+        self.num_heads = num_heads
+        self.head_dim = embed_dim // num_heads
+        self.qkv = nn.Linear(embed_dim, 3 * embed_dim)
+        self.out = nn.Linear(embed_dim, embed_dim)
         self.ln1 = nn.LayerNorm(embed_dim)
         self.ln2 = nn.LayerNorm(embed_dim)
         self.ff = nn.Sequential(
@@ -275,7 +276,14 @@ class EncoderBlock(nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        A, _ = self.attn(x, x, x, need_weights=False)
+        B, N, D = x.shape
+        qkv = self.qkv(x).view(B, N, 3, self.num_heads, self.head_dim)
+        q, k, v = qkv.permute(2, 0, 3, 1, 4).unbind(0)
+        if self.head_dim >= 32 or x.device.type == "cpu":
+            A = F.scaled_dot_product_attention(q, k, v)
+        else:
+            A = (q @ k.transpose(-1, -2) * self.head_dim**-0.5).softmax(dim=-1) @ v
+        A = self.out(A.transpose(1, 2).reshape(B, N, D))
         x = self.ln1(A + x)
         return self.ln2(x + self.ff(x))
 
@@ -306,11 +314,7 @@ def _mlp(
 
 class ResidualBlock(nn.Module):
     """
-    Pre-activation residual block `h + W ReLU(LayerNorm(h)) + b`. The weights `W`
-    and bias `b` are initialised to zero, so that the block starts out as the
-    identity. Since the hidden layers of the MLPs share their weights, a stack of
-    these blocks is a forward Euler discretisation of the autonomous ODE
-    `dh/ds = W act(LayerNorm(h)) + b`.
+    Simple residual feedforward block.
 
     Args:
         `H`: width of the block.
