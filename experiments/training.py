@@ -45,7 +45,8 @@ def train_model(space, generate_0, generate_1, config, x_0s_eval, x_1s_eval, flo
     train_loader = DataGenerator(generate_0, generate_1, config["batch_size"], config["batches_per_epoch"], coupling=coupling)
 
     transformer = {key: config[key] for key in ("embed_dim", "num_heads", "expansion") if key in config}
-    model_FM = FlowField(space, L=config["depth"], H=config["width"], **transformer).to(device)
+    prediction = {key: config[key] for key in ("prediction", "ε") if key in config}
+    model_FM = FlowField(space, L=config["depth"], H=config["width"], **transformer, **prediction).to(device)
     print("Number of parameters: ", model_FM.parameter_count)
 
     optimizer_FM = torch.optim.Adam(model_FM.parameters(), config["learning_rate"], weight_decay=config["weight_decay"], fused=True)

@@ -6,7 +6,8 @@ Implementation of flow matching[1] on Lie groups over exponential curves,[2]
 on powers of Lie groups, and on homogeneous spaces of matrix groups, such as
 position-orientation space M3 of SE(3) with mav exponential curves,[3] and
 event-velocity space P3 of SE^+(1, 2).
-The model is implemented in the `FlowField` class.
+The model is implemented in the `FlowField` class, whose network predicts
+either the flow field (v-prediction) or the endpoint (x-prediction).
 `DataGenerator` draws the training pairs, optionally coupled by mini-batch
 optimal transport with `OTCoupling`.
 
@@ -23,6 +24,7 @@ References:
   DOI:10.1007/978-3-032-03918-7_4.
 """
 
+from typing import Literal
 from collections.abc import Iterator
 
 import numpy as np
@@ -60,6 +62,15 @@ class FlowField(nn.Module):
           transformer. Defaults to 8.
         `expansion`: expansion factor in the pointwise feedforward network of
           the transformer. Defaults to 4.
+        `prediction`: what the network predicts. With `"v"`, it predicts the
+          generator components of the flow field directly. With `"x"`, it
+          predicts the exponential coordinates `c` of the endpoint
+          `x_1 = exp(C)`, from which the flow field is computed as
+          `log(x_t^-1 x_1) / (1 - t)`, the generator of the exponential curve
+          from `x_t` that reaches `x_1` at time 1;[4] this is only defined for
+          groups, and products and powers of groups. Defaults to `"v"`.
+        `ε`: with `prediction="x"`, `1 - t` is clamped to at least `ε` to
+          avoid the singularity at `t = 1`, as in [4]. Defaults to 0.05.
 
     References:
         [1]: Y. Lipman, R.T.Q. Chen, H. Ben-Hami, M. Nickel, and M. Le.
@@ -72,6 +83,8 @@ class FlowField(nn.Module):
           on Position-Orientation Space." 7th International Conference on
           Geometric Science of Information (2025).
           DOI:10.1007/978-3-032-03918-7_4.
+        [4]: T. Li and K. He. "Back to Basics: Let Denoising Generative Models
+          Denoise." arXiv preprint (2025). DOI:10.48550/arXiv.2511.13720.
     """
 
     def __init__(
@@ -82,9 +95,15 @@ class FlowField(nn.Module):
         embed_dim: int = 256,
         num_heads: int = 8,
         expansion: int = 4,
+        prediction: Literal["v", "x"] = "v",
+        ε: float = 0.05,
     ):
         super().__init__()
+        if prediction not in ("v", "x"):
+            raise ValueError(f"Unknown prediction {prediction}!")
         self.space = space
+        self.prediction = prediction
+        self.ε = ε
         self.tokens = isinstance(space, PowerSpace)
         if self.tokens:
             self.network = _transformer(
@@ -93,16 +112,31 @@ class FlowField(nn.Module):
         else:
             self.network = _mlp(space.point_size + 1, space.generator_dim, H, L)
 
-    def forward(self, x_t: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+    def network_output(self, x_t: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         """
-        Return the predicted generator components at the points `x_t` of shape
-        [N, ...] at the times `t`, with one time per point.
+        Return the raw output of the network at the points `x_t` of shape
+        [N, ...] at the times `t`, with one time per point: generator components
+        of the flow field if `prediction="v"`, or exponential coordinates of the
+        endpoint if `prediction="x"`.
         """
         if self.tokens:
             x_t = x_t.flatten(start_dim=2)
             t = t.reshape(len(t), 1, 1).expand(*x_t.shape[:-1], 1)
             return self.network(torch.cat((x_t, t), dim=-1))
         return self.network(torch.cat((x_t.flatten(start_dim=1), t.reshape(len(t), 1)), dim=-1))
+
+    def forward(self, x_t: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        """
+        Return the predicted generator components of the flow field at the
+        points `x_t` of shape [N, ...] at the times `t`, with one time per
+        point.
+        """
+        out = self.network_output(x_t, t)
+        if self.prediction == "v":
+            return out
+        x_1 = self.space.exp_point(out)
+        t = t.reshape(len(t), *(out.ndim - 1) * [1])
+        return self.space.generator_components(x_t, x_1) / (1 - t).clamp_min(self.ε)
 
     def velocity(self, x_t: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         """
@@ -111,7 +145,7 @@ class FlowField(nn.Module):
         return self(x_t, t.reshape(1).expand(len(x_t)))
 
     def step(
-        self, x_t: torch.Tensor, t: torch.Tensor, Δt: torch.Tensor, method: str = "heun"
+        self, x_t: torch.Tensor, t: torch.Tensor, Δt: torch.Tensor, method: Literal["euler", "heun"] = "heun"
     ) -> torch.Tensor:
         """
         Take a step of size `Δt` from time `t`, with the explicit Euler method
@@ -128,7 +162,7 @@ class FlowField(nn.Module):
 
     @torch.no_grad()
     def sample(
-        self, x_0: torch.Tensor, N_steps: int = 120, method: str = "heun"
+        self, x_0: torch.Tensor, N_steps: int = 120, method: Literal["euler", "heun"] = "heun"
     ) -> torch.Tensor:
         """
         Integrate the flow from samples `x_0` at t = 0 to t = 1 in `N_steps`
@@ -207,7 +241,7 @@ class FlowField(nn.Module):
         x_1: torch.Tensor,
         w: torch.Tensor | None = None,
         N_steps: int = 120,
-        method: str = "heun",
+        method: Literal["euler", "heun"] = "heun",
     ) -> dict[str, float]:
         """
         Compute the Wasserstein-1 distance, precision, and coverage between

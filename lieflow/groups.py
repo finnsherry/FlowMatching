@@ -85,6 +85,15 @@ class Space(ABC):
         """
         raise NotImplementedError
 
+    def exp_point(self, a: torch.Tensor) -> torch.Tensor:
+        """
+        Point with exponential coordinates `a`, i.e. `exp(A)` with `A` the Lie
+        algebra element with components `a`: the end of the exponential curve
+        from the identity with generator components `a`. Only defined for
+        groups, and products and powers of groups.
+        """
+        raise NotImplementedError(f"{type(self).__name__} has no exponential coordinates!")
+
     def generator_norm_squared(
         self, x: torch.Tensor, a: torch.Tensor, w: torch.Tensor | None = None
     ) -> torch.Tensor:
@@ -217,6 +226,12 @@ class ProductSpace(Space):
             *(S.flow(y, a[..., s], t) for S, y, s in zip(self.spaces, self.unpack(x), self.generator_slices))
         )
 
+    def exp_point(self, a):
+        """
+        Point with exponential coordinates `a`, factorwise.
+        """
+        return self.pack(*(S.exp_point(a[..., s]) for S, s in zip(self.spaces, self.generator_slices)))
+
     def generator_norm_squared(self, x, a, w=None):
         """
         Squared norm of the generator components `a` at `x`, the sum of the
@@ -292,6 +307,12 @@ class PowerSpace(Space):
         a time `t`, factorwise.
         """
         return self.G.flow(x, a, t)
+
+    def exp_point(self, a):
+        """
+        Point with exponential coordinates `a`, factorwise.
+        """
+        return self.G.exp_point(a)
 
     def generator_norm_squared(self, x, a, w=None):
         """
@@ -406,6 +427,12 @@ class Group(Space):
         `t`, i.e. `g exp(t A)`.
         """
         return self.L(g, self.exp(t * A))
+
+    def exp_point(self, A: torch.Tensor) -> torch.Tensor:
+        """
+        Point with exponential coordinates `A`, i.e. `exp(A)`.
+        """
+        return self.exp(A)
 
 
 class Rn(Group):
@@ -793,6 +820,13 @@ class MatrixGroup(Space):
         components `a`.
         """
         return self.L(R, self.exp(self.lie_algebra_element(t * a)))
+
+    def exp_point(self, a: torch.Tensor) -> torch.Tensor:
+        """
+        Point with exponential coordinates `a`, i.e. `exp(A)` with `A` the Lie
+        algebra element with components `a`.
+        """
+        return self.exp(self.lie_algebra_element(a))
 
 
 class SO3(MatrixGroup):
@@ -1731,8 +1765,11 @@ class P3(HomogeneousSpace):
 
 
 def _mod_offset(x, period, offset):
-    """Compute `x` modulo `period` with offset `offset`."""
-    return x - (x - offset) // period * period
+    """
+    Compute `x` modulo `period` with offset `offset`, differentiably, with
+    derivative 1 away from the jumps.
+    """
+    return torch.remainder(x - offset, period) + offset
 
 
 def _trace(R: torch.Tensor) -> torch.Tensor:

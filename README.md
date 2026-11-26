@@ -47,6 +47,8 @@ Here the basic group operations are defined. The models and metrics only use the
 * `ProductSpace`: This is the direct product of any of the above spaces, which may be of different types (e.g. SE(2) x R^2, or M3 x R^n), for which all operations act factorwise; e.g. the flow is the product of the flows of the factors. The weights of the norm are the concatenation of the weights of the factors.
 * `PowerSpace`: This is the power G^m of any of the above spaces G (e.g. point clouds in R^2, or sets of rotations in SO(3)), for which all operations act factorwise. By default, the factors are unordered, so that the distance between two elements is minimised over all permutations of the factors.
 
+For x-prediction, groups, and products and powers of groups, additionally provide `exp_point`, the point with given exponential coordinates.
+
 Notably, the data are not wrapped in any custom object, but are assumed to be `torch.Tensor`s. For data in a `Group`, the last dimension must have length equal to the dimension of the group, for data in a `MatrixGroup` or `HomogeneousSpace`, the last two dimensions must equal the size of the matrix representation of the points, for data in a `ProductSpace`, the points of the factors are flattened and concatenated along the last dimension (see `ProductSpace.pack` and `ProductSpace.unpack`), while for data in a `PowerSpace` of G^m, the factors are stacked along an extra dimension of length m before those of a point of G.
 
 ### `models`
@@ -55,6 +57,8 @@ Here, the flow matching model is defined. One must first define a space `space`,
 The network predicts the components of the generator of the flow field at a point and time, and its architecture depends on the space:
 * By default, it is an MLP acting on the flattened point and the time, with `L` hidden layers of width `H`, which are the same pre-activation residual block (so the hidden layers share their weights).
 * If `space` is a `groups.PowerSpace`, it is a transformer with one token per (flattened) factor, consisting of a linear embedding of dimension `embed_dim`, `L` encoder blocks with `num_heads` attention heads, which are the same encoder block, and a linear output layer. Since it has no positional encoding, it is equivariant under permutations of the factors, and the same network can be applied to data in various powers of the same space.
+
+With `prediction="x"`, the network instead predicts the exponential coordinates `c` of the endpoint `x_1 = exp(C)`, and the flow field is `log(x_t^-1 x_1) / (1 - t)`, the generator of the exponential curve from `x_t` that reaches `x_1` at time 1, with `1 - t` clamped to at least `ε` as in Li & He. This is only available for groups, and products and powers of groups. Training, sampling, and the loss are the same for both prediction modes.
 
 Training pairs can be drawn with `DataGenerator`, optionally coupled by mini-batch optimal transport with `OTCoupling`, and the model can be trained with its `train_epoch` method using the `LogarithmicDistance` loss. See `experiments/training.py` for an example.
 
